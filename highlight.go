@@ -78,7 +78,7 @@ func (sh *SyntaxHighlighter) HighlightMarkdown(text string) string {
 			result[i] = line // Will be replaced later
 		} else {
 			// Regular markdown line
-			result[i] = sh.highlightMarkdownLine(line)
+			result[i] = sh.HighlightMarkdownLine(line)
 		}
 	}
 	
@@ -110,8 +110,8 @@ func (sh *SyntaxHighlighter) highlightCodeBlock(code, lang string) string {
 	return buf.String()
 }
 
-// highlightMarkdownLine highlights a single markdown line
-func (sh *SyntaxHighlighter) highlightMarkdownLine(line string) string {
+// HighlightMarkdownLine highlights a single markdown line
+func (sh *SyntaxHighlighter) HighlightMarkdownLine(line string) string {
 	// Headers
 	if strings.HasPrefix(line, "# ") {
 		return lipgloss.NewStyle().

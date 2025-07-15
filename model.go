@@ -259,7 +259,7 @@ func (m Model) renderEditor(height int) string {
 		
 		// Apply syntax highlighting to the line
 		if m.highlighter != nil {
-			line = m.highlighter.highlightMarkdownLine(line)
+			line = m.highlighter.HighlightMarkdownLine(line)
 		}
 		
 		// Show cursor in current line (after highlighting)
@@ -282,7 +282,7 @@ func (m Model) renderEditor(height int) string {
 					// Re-highlight with cursor inserted
 					lineWithCursor := plainLine[:m.cursor.col] + "█" + plainLine[m.cursor.col+1:]
 					if m.highlighter != nil {
-						line = m.highlighter.highlightMarkdownLine(lineWithCursor)
+						line = m.highlighter.HighlightMarkdownLine(lineWithCursor)
 					}
 				}
 			}
