@@ -1,17 +1,15 @@
 package main
 
 import (
-	"regexp"
 	"strings"
-
+	"github.com/charmbracelet/lipgloss"
 	"github.com/alecthomas/chroma/v2"
-	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/alecthomas/chroma/v2/formatters"
 )
 
-// SyntaxHighlighter handles syntax highlighting for code blocks and markdown
+// SyntaxHighlighter handles syntax highlighting using Chroma
 type SyntaxHighlighter struct {
 	formatter chroma.Formatter
 	style     *chroma.Style
@@ -19,213 +17,103 @@ type SyntaxHighlighter struct {
 
 // NewSyntaxHighlighter creates a new syntax highlighter
 func NewSyntaxHighlighter() *SyntaxHighlighter {
-	formatter := formatters.Get("terminal16m")
+	// Use the terminal256 formatter which works well with terminals
+	formatter := formatters.Get("terminal256")
 	if formatter == nil {
 		formatter = formatters.Fallback
 	}
 	
-	style := styles.Get("monokai")
+	// Use a dark theme that works well in terminals
+	style := styles.Get("dracula")
 	if style == nil {
 		style = styles.Fallback
 	}
-
+	
 	return &SyntaxHighlighter{
 		formatter: formatter,
 		style:     style,
 	}
 }
 
-// HighlightMarkdown applies syntax highlighting to markdown text
-func (sh *SyntaxHighlighter) HighlightMarkdown(text string) string {
-	lines := strings.Split(text, "\n")
-	result := make([]string, len(lines))
-	
-	inCodeBlock := false
-	codeBlockLang := ""
-	codeBlockLines := []string{}
-	
-	for i, line := range lines {
-		if strings.HasPrefix(line, "```") {
-			if !inCodeBlock {
-				// Start of code block
-				inCodeBlock = true
-				codeBlockLang = strings.TrimSpace(strings.TrimPrefix(line, "```"))
-				codeBlockLines = []string{}
-				result[i] = sh.styleCodeBlockMarker(line)
-			} else {
-				// End of code block
-				inCodeBlock = false
-				
-				// Highlight the code block
-				if len(codeBlockLines) > 0 {
-					highlightedCode := sh.highlightCodeBlock(strings.Join(codeBlockLines, "\n"), codeBlockLang)
-					highlightedLines := strings.Split(highlightedCode, "\n")
-					
-					// Insert highlighted lines
-					for j, highlightedLine := range highlightedLines {
-						if i-len(codeBlockLines)+j >= 0 && i-len(codeBlockLines)+j < len(result) {
-							result[i-len(codeBlockLines)+j] = "  " + highlightedLine
-						}
-					}
-				}
-				
-				result[i] = sh.styleCodeBlockMarker(line)
-				codeBlockLines = []string{}
-			}
-		} else if inCodeBlock {
-			// Inside code block, collect lines for highlighting
-			codeBlockLines = append(codeBlockLines, line)
-			result[i] = line // Will be replaced later
-		} else {
-			// Regular markdown line
-			result[i] = sh.HighlightMarkdownLine(line)
-		}
+// HighlightCodeBlock highlights a code block using Chroma
+func (sh *SyntaxHighlighter) HighlightCodeBlock(code, lang string) string {
+	// Handle empty code or language
+	if code == "" {
+		return code
 	}
 	
-	return strings.Join(result, "\n")
-}
-
-// highlightCodeBlock highlights a code block with the specified language
-func (sh *SyntaxHighlighter) highlightCodeBlock(code, lang string) string {
-	if lang == "" {
-		lang = "text"
-	}
-	
+	// Get the lexer for the language
 	lexer := lexers.Get(lang)
 	if lexer == nil {
-		lexer = lexers.Fallback
+		// Try to guess the lexer from the content
+		lexer = lexers.Analyse(code)
+	}
+	if lexer == nil {
+		// Fall back to plain text
+		lexer = lexers.Get("text")
 	}
 	
+	// Ensure lexer is configured
+	lexer = chroma.Coalesce(lexer)
+	
+	// Tokenize the code
 	iterator, err := lexer.Tokenise(nil, code)
 	if err != nil {
-		return code
+		// Fall back to simple green coloring
+		return lipgloss.NewStyle().
+			Foreground(lipgloss.Color("2")).
+			Render(code)
 	}
 	
-	var buf strings.Builder
-	err = sh.formatter.Format(&buf, sh.style, iterator)
+	// Format the tokens
+	var result strings.Builder
+	err = sh.formatter.Format(&result, sh.style, iterator)
 	if err != nil {
-		return code
+		// Fall back to simple green coloring
+		return lipgloss.NewStyle().
+			Foreground(lipgloss.Color("2")).
+			Render(code)
 	}
 	
-	return buf.String()
+	return result.String()
 }
 
-// HighlightMarkdownLine highlights a single markdown line
+// HighlightMarkdownLine highlights a single markdown line with minimal styling
 func (sh *SyntaxHighlighter) HighlightMarkdownLine(line string) string {
 	// Headers
 	if strings.HasPrefix(line, "# ") {
 		return lipgloss.NewStyle().
-			Foreground(lipgloss.Color(CTPBlue)).
+			Foreground(lipgloss.Color("4")).  // Blue
 			Bold(true).
 			Render(line)
 	}
 	if strings.HasPrefix(line, "## ") {
 		return lipgloss.NewStyle().
-			Foreground(lipgloss.Color(CTPGreen)).
+			Foreground(lipgloss.Color("6")).  // Cyan
 			Bold(true).
 			Render(line)
 	}
 	if strings.HasPrefix(line, "### ") {
 		return lipgloss.NewStyle().
-			Foreground(lipgloss.Color(CTPYellow)).
-			Bold(true).
-			Render(line)
-	}
-	if strings.HasPrefix(line, "#### ") {
-		return lipgloss.NewStyle().
-			Foreground(lipgloss.Color(CTPPeach)).
+			Foreground(lipgloss.Color("3")).  // Yellow
 			Bold(true).
 			Render(line)
 	}
 	
-	// Bold text
-	boldRegex := regexp.MustCompile(`\*\*(.*?)\*\*`)
-	line = boldRegex.ReplaceAllStringFunc(line, func(match string) string {
-		content := strings.Trim(match, "*")
+	// Code blocks
+	if strings.HasPrefix(line, "```") {
 		return lipgloss.NewStyle().
-			Foreground(lipgloss.Color(CTPText)).
-			Bold(true).
-			Render(content)
-	})
-	
-	// Italic text
-	italicRegex := regexp.MustCompile(`\*(.*?)\*`)
-	line = italicRegex.ReplaceAllStringFunc(line, func(match string) string {
-		content := strings.Trim(match, "*")
-		return lipgloss.NewStyle().
-			Foreground(lipgloss.Color(CTPText)).
-			Italic(true).
-			Render(content)
-	})
-	
-	// Inline code
-	codeRegex := regexp.MustCompile("`([^`]+)`")
-	line = codeRegex.ReplaceAllStringFunc(line, func(match string) string {
-		content := strings.Trim(match, "`")
-		return lipgloss.NewStyle().
-			Foreground(lipgloss.Color(CTPRed)).
-			Background(lipgloss.Color(CTPSurface0)).
-			Render(content)
-	})
-	
-	// Links
-	linkRegex := regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
-	line = linkRegex.ReplaceAllStringFunc(line, func(match string) string {
-		parts := linkRegex.FindStringSubmatch(match)
-		if len(parts) == 3 {
-			linkText := parts[1]
-			linkURL := parts[2]
-			return lipgloss.NewStyle().
-				Foreground(lipgloss.Color(CTPBlue)).
-				Underline(true).
-				Render(linkText) + lipgloss.NewStyle().
-				Foreground(lipgloss.Color(CTPOverlay0)).
-				Render(" ("+linkURL+")")
-		}
-		return match
-	})
+			Foreground(lipgloss.Color("8")).  // Gray
+			Render(line)
+	}
 	
 	// List items
 	if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
 		return lipgloss.NewStyle().
-			Foreground(lipgloss.Color(CTPMauve)).
-			Render("• ") + lipgloss.NewStyle().
-			Foreground(lipgloss.Color(CTPText)).
-			Render(line[2:])
+			Foreground(lipgloss.Color("5")).  // Magenta
+			Render("• ") + line[2:]
 	}
 	
-	// Numbered list items
-	numberedListRegex := regexp.MustCompile(`^(\d+)\. (.*)$`)
-	if numberedListRegex.MatchString(line) {
-		parts := numberedListRegex.FindStringSubmatch(line)
-		if len(parts) == 3 {
-			number := parts[1]
-			content := parts[2]
-			return lipgloss.NewStyle().
-				Foreground(lipgloss.Color(CTPMauve)).
-				Render(number+". ") + lipgloss.NewStyle().
-				Foreground(lipgloss.Color(CTPText)).
-				Render(content)
-		}
-	}
-	
-	// Blockquotes
-	if strings.HasPrefix(line, "> ") {
-		return lipgloss.NewStyle().
-			Foreground(lipgloss.Color(CTPOverlay0)).
-			Italic(true).
-			Render(line)
-	}
-	
-	// Default text color
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color(CTPText)).
-		Render(line)
-}
-
-// styleCodeBlockMarker styles the ``` markers
-func (sh *SyntaxHighlighter) styleCodeBlockMarker(line string) string {
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color(CTPOverlay0)).
-		Render(line)
+	// Default - just return the line as is
+	return line
 }

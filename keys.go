@@ -1,7 +1,7 @@
 package main
 
 import (
-	"io/ioutil"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -47,6 +47,9 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case ModeInsert:
 			return m.handleInsertMode(msg)
 		}
+	} else if m.activeTab == TabPreview {
+		// Handle scrolling in preview mode
+		return m.handlePreviewMode(msg)
 	}
 
 	return m, nil
@@ -204,6 +207,20 @@ func (m Model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) handlePreviewMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "j", "down":
+		m.previewOffset++
+		return m, nil
+	case "k", "up":
+		if m.previewOffset > 0 {
+			m.previewOffset--
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
 func (m Model) handleInsertMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
@@ -314,20 +331,20 @@ func (m Model) handleInsertMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				currentLine := m.content[m.cursor.row]
 				beforeCursor := currentLine[:m.cursor.col]
 				afterCursor := currentLine[m.cursor.col:]
-				
+
 				// First line: before cursor + first line of paste
 				m.content[m.cursor.row] = beforeCursor + lines[0]
-				
+
 				// Insert middle lines
 				newLines := lines[1 : len(lines)-1]
 				for i, line := range newLines {
 					m.content = append(m.content[:m.cursor.row+1+i], append([]string{line}, m.content[m.cursor.row+1+i:]...)...)
 				}
-				
+
 				// Last line: last line of paste + after cursor
 				lastLine := lines[len(lines)-1] + afterCursor
 				m.content = append(m.content[:m.cursor.row+len(lines)-1], append([]string{lastLine}, m.content[m.cursor.row+len(lines)-1:]...)...)
-				
+
 				// Update cursor position
 				m.cursor.row += len(lines) - 1
 				m.cursor.col = len(lines[len(lines)-1])
@@ -350,7 +367,7 @@ func (m Model) handleInsertMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m Model) adjustViewport() {
+func (m *Model) adjustViewport() {
 	// Calculate the actual content height available for editor text
 	// This needs to account for:
 	// - Window border (top + bottom = 2)
@@ -360,7 +377,7 @@ func (m Model) adjustViewport() {
 	// - Editor padding (top + bottom = 2)
 	// Total: 8 lines of UI overhead
 	contentHeight := m.height - 8
-	
+
 	// Ensure we have a minimum height
 	if contentHeight < 1 {
 		contentHeight = 1
@@ -374,7 +391,7 @@ func (m Model) adjustViewport() {
 		// Cursor moved below visible area, scroll down
 		m.viewport.offsetRow = m.cursor.row - contentHeight + 1
 	}
-	
+
 	// Ensure viewport doesn't go negative
 	if m.viewport.offsetRow < 0 {
 		m.viewport.offsetRow = 0
@@ -385,7 +402,7 @@ func (m Model) adjustViewport() {
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
-	
+
 	if m.cursor.col < m.viewport.offsetCol {
 		// Cursor moved left of visible area, scroll left
 		m.viewport.offsetCol = m.cursor.col
@@ -393,7 +410,7 @@ func (m Model) adjustViewport() {
 		// Cursor moved right of visible area, scroll right
 		m.viewport.offsetCol = m.cursor.col - contentWidth + 1
 	}
-	
+
 	// Ensure horizontal viewport doesn't go negative
 	if m.viewport.offsetCol < 0 {
 		m.viewport.offsetCol = 0
@@ -408,18 +425,18 @@ func (m Model) saveFile() (tea.Model, tea.Cmd) {
 	}
 
 	content := strings.Join(m.content, "\n")
-	err := ioutil.WriteFile(filename, []byte(content), 0644)
+	err := os.WriteFile(filename, []byte(content), 0644)
 
 	if err != nil {
 		m.statusMsg = "Error saving file: " + err.Error()
-		return m, tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
+		return m, tea.Tick(ErrorMsgDuration, func(t time.Time) tea.Msg {
 			return tea.KeyMsg{}
 		})
 	}
 
 	m.saved = true
 	m.statusMsg = "File saved: " + filename
-	return m, tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
+	return m, tea.Tick(StatusMsgDuration, func(t time.Time) tea.Msg {
 		return tea.KeyMsg{}
 	})
 }
@@ -528,7 +545,8 @@ func (m Model) endOfWord() Position {
 	return Position{row: row, col: col}
 }
 
-// getClipboard attempts to get clipboard content using xclip or wl-clipboard
+// getClipboard attempts to get clipboard content using various clipboard tools
+// Returns empty string if no clipboard tool is available or clipboard is empty
 func getClipboard() string {
 	// Try xclip first (X11)
 	cmd := exec.Command("xclip", "-o", "-selection", "clipboard")
@@ -551,6 +569,7 @@ func getClipboard() string {
 		return strings.TrimRight(string(output), "\n")
 	}
 
+	// No clipboard tool available
 	return ""
 }
 

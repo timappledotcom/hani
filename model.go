@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 	"strings"
 	"time"
 
@@ -11,34 +11,15 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Catppuccin Mocha color palette
-var (
-	CTPRosewater = "#f5e0dc"
-	CTPFlamingo = "#f2cdcd"
-	CTPPink     = "#f5c2e7"
-	CTPMauve    = "#cba6f7"
-	CTPRed      = "#f38ba8"
-	CTPMaroon   = "#eba0ac"
-	CTPPeach    = "#fab387"
-	CTPYellow   = "#f9e2af"
-	CTPGreen    = "#a6e3a1"
-	CTPTeal     = "#94e2d5"
-	CTPSky      = "#89dceb"
-	CTPSapphire = "#74c7ec"
-	CTPBlue     = "#89b4fa"
-	CTPLavender = "#b4befe"
-	CTPText     = "#cdd6f4"
-	CTPSubtext1 = "#bac2de"
-	CTPSubtext0 = "#a6adc8"
-	CTPOverlay2 = "#9399b2"
-	CTPOverlay1 = "#7f849c"
-	CTPOverlay0 = "#6c7086"
-	CTPSurface2 = "#585b70"
-	CTPSurface1 = "#45475a"
-	CTPSurface0 = "#313244"
-	CTPBase     = "#1e1e2e"
-	CTPMantle   = "#181825"
-	CTPCrust    = "#11111b"
+// Configuration constants
+const (
+	DefaultWordWrap     = 80
+	MaxWordWrap        = 120
+	MinWordWrap        = 40
+	WordWrapMargin     = 10
+	CursorBlinkRate    = 500 * time.Millisecond
+	StatusMsgDuration  = 2 * time.Second
+	ErrorMsgDuration   = 3 * time.Second
 )
 
 type Mode int
@@ -56,19 +37,21 @@ const (
 )
 
 type Model struct {
-	filename    string
-	content     []string
-	cursor      Position
-	mode        Mode
-	activeTab   Tab
-	width       int
-	height      int
-	viewport    Viewport
-	renderer    *glamour.TermRenderer
-	highlighter *SyntaxHighlighter
-	saved       bool
-	statusMsg   string
-	cursorBlink bool
+	filename      string
+	content       []string
+	cursor        Position
+	mode          Mode
+	activeTab     Tab
+	width         int
+	height        int
+	viewport      Viewport
+	previewOffset int
+	renderer      *glamour.TermRenderer
+	highlighter   *SyntaxHighlighter
+	saved         bool
+	statusMsg     string
+	cursorBlink   bool
+	codeBlocks    []CodeBlock
 }
 
 type Position struct {
@@ -83,35 +66,48 @@ type Viewport struct {
 
 type BlinkMsg struct{}
 
+type CodeBlock struct {
+	start int
+	end   int
+	lang  string
+}
+
 func NewModel(filename string) Model {
 	content := []string{""}
-	saved := false // New files start as unsaved
+	saved := false
+	var statusMsg string
 
 	// Load file if it exists
 	if filename != "" {
-		if data, err := ioutil.ReadFile(filename); err == nil {
+		if data, err := os.ReadFile(filename); err == nil {
 			content = strings.Split(string(data), "\n")
-			// Remove empty line at the end if file ends with newline
 			if len(content) > 0 && content[len(content)-1] == "" {
 				content = content[:len(content)-1]
 			}
-			saved = true // Existing files start as saved
+			saved = true
+		} else {
+			// File doesn't exist or can't be read - show status message
+			statusMsg = "Could not load file: " + filename + " (starting with new file)"
+			saved = false
 		}
 	} else {
-		// No filename provided, start as saved for empty content
 		saved = true
 	}
 
-	// Initialize glamour renderer with dark theme
-	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithEnvironmentConfig(),
-		glamour.WithWordWrap(80),
+	// Initialize glamour renderer with defaults
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(DefaultWordWrap), // Will be updated when window size is known
 	)
-	
+	if err != nil {
+		// Fallback to nil renderer if initialization fails
+		renderer = nil
+	}
+
 	// Initialize syntax highlighter
 	highlighter := NewSyntaxHighlighter()
 
-	return Model{
+	m := Model{
 		filename:    filename,
 		content:     content,
 		cursor:      Position{row: 0, col: 0},
@@ -121,12 +117,18 @@ func NewModel(filename string) Model {
 		renderer:    renderer,
 		highlighter: highlighter,
 		saved:       saved,
+		statusMsg:   statusMsg,
 		cursorBlink: true,
 	}
+
+	// Initialize code blocks
+	m.rebuildCodeBlocks()
+
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Tick(time.Millisecond*500, func(t time.Time) tea.Msg {
+	return tea.Tick(CursorBlinkRate, func(t time.Time) tea.Msg {
 		return BlinkMsg{}
 	})
 }
@@ -136,6 +138,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+		// Update glamour renderer with new word wrap based on width
+		if m.width > 20 {
+			wordWrap := m.width - WordWrapMargin
+			if wordWrap > MaxWordWrap {
+				wordWrap = MaxWordWrap
+			} else if wordWrap < MinWordWrap {
+				wordWrap = MinWordWrap
+			}
+
+			if renderer, err := glamour.NewTermRenderer(
+				glamour.WithAutoStyle(),
+				glamour.WithWordWrap(wordWrap),
+			); err == nil {
+				m.renderer = renderer
+			}
+		}
+
 		return m, nil
 
 	case tea.KeyMsg:
@@ -143,7 +163,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case BlinkMsg:
 		m.cursorBlink = !m.cursorBlink
-		return m, tea.Tick(time.Millisecond*500, func(t time.Time) tea.Msg {
+		return m, tea.Tick(CursorBlinkRate, func(t time.Time) tea.Msg {
 			return BlinkMsg{}
 		})
 	}
@@ -156,8 +176,10 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
-	// Create main content area - account for window border (no tab bar)
-	contentHeight := m.height - 8 // Leave space for status bar, help bar, and window border
+	// Create tab bar
+	tabBar := m.renderTabBar()
+
+	contentHeight := m.height - 5 // Account for tab bar and status bar
 	var content string
 
 	if m.activeTab == TabEditor {
@@ -166,82 +188,10 @@ func (m Model) View() string {
 		content = m.renderPreview(contentHeight)
 	}
 
-	// Create status bar
+	// Status bar
 	statusBar := m.renderStatusBar()
 
-	// Create help bar
-	helpBar := m.renderHelpBar()
-
-	// Join all components (no tab bar)
-	mainContent := lipgloss.JoinVertical(
-		lipgloss.Top,
-		content,
-		statusBar,
-		helpBar,
-	)
-
-	// Add window border - let it size itself based on content
-	windowStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(CTPBlue)).
-		Background(lipgloss.Color(CTPBase)).
-		Padding(0, 1)
-
-	return windowStyle.Render(mainContent)
-}
-
-func (m Model) renderTabBar() string {
-	var tabs []string
-
-	// Inactive tab style
-	inactiveStyle := lipgloss.NewStyle().
-		Padding(0, 2).
-		Margin(0, 1).
-		Background(lipgloss.Color(CTPSurface0)).
-		Foreground(lipgloss.Color(CTPSubtext0)).
-		Border(lipgloss.RoundedBorder(), false, false, true, false).
-		BorderForeground(lipgloss.Color(CTPSurface2))
-
-	// Active tab style
-	activeStyle := lipgloss.NewStyle().
-		Padding(0, 2).
-		Margin(0, 1).
-		Background(lipgloss.Color(CTPBlue)).
-		Foreground(lipgloss.Color(CTPCrust)).
-		Bold(true).
-		Border(lipgloss.RoundedBorder(), false, false, true, false).
-		BorderForeground(lipgloss.Color(CTPBlue))
-
-	// Render tabs
-	if m.activeTab == TabEditor {
-		tabs = append(tabs, activeStyle.Render("📝 Editor"))
-		tabs = append(tabs, inactiveStyle.Render("👁  Preview"))
-	} else {
-		tabs = append(tabs, inactiveStyle.Render("📝 Editor"))
-		tabs = append(tabs, activeStyle.Render("👁  Preview"))
-	}
-
-	// Join tabs horizontally
-	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
-
-	// Fill the rest of the line with background
-	remaining := (m.width - 6) - lipgloss.Width(tabBar)
-	if remaining > 0 {
-		filler := lipgloss.NewStyle().
-			Width(remaining).
-			Background(lipgloss.Color(CTPMantle)).
-			Render("")
-		tabBar = lipgloss.JoinHorizontal(lipgloss.Top, tabBar, filler)
-	}
-
-	// Add top and bottom borders to the entire tab bar
-	tabBarStyle := lipgloss.NewStyle().
-		Width(m.width - 6). // Account for window border and padding
-		Background(lipgloss.Color(CTPMantle)).
-		Border(lipgloss.NormalBorder(), false, false, true, false).
-		BorderForeground(lipgloss.Color(CTPSurface2))
-
-	return tabBarStyle.Render(tabBar)
+	return lipgloss.JoinVertical(lipgloss.Top, tabBar, content, statusBar)
 }
 
 func (m Model) renderEditor(height int) string {
@@ -250,76 +200,62 @@ func (m Model) renderEditor(height int) string {
 	for i := 0; i < height; i++ {
 		lineNum := m.viewport.offsetRow + i
 		if lineNum >= len(m.content) {
-			// Style the tilde markers
-			lines[i] = lipgloss.NewStyle().Foreground(lipgloss.Color(CTPOverlay0)).Render("~")
+			lines[i] = "~"
 			continue
 		}
 
 		line := m.content[lineNum]
-		
-		// Apply syntax highlighting to the line
-		if m.highlighter != nil {
-			line = m.highlighter.HighlightMarkdownLine(line)
-		}
-		
-		// Show cursor in current line (after highlighting)
-		if lineNum == m.cursor.row && m.cursor.col <= len(m.content[lineNum]) {
-			cursorChar := " "
-			if m.cursorBlink {
-				cursorChar = lipgloss.NewStyle().Background(lipgloss.Color(CTPText)).Foreground(lipgloss.Color(CTPBase)).Render("█")
-			}
-			
-			// Insert cursor at the right position
-			originalLine := m.content[lineNum]
-			if m.cursor.col == len(originalLine) {
-				line += cursorChar
+
+		// Handle horizontal scrolling
+		if m.viewport.offsetCol > 0 {
+			if m.viewport.offsetCol < len(line) {
+				line = line[m.viewport.offsetCol:]
 			} else {
-				// For cursor insertion with syntax highlighting, we need to be more careful
-				// This is a simplified approach - in a more complex editor, you'd want
-				// to handle this with proper cursor positioning after highlighting
-				plainLine := m.content[lineNum]
-				if m.cursor.col < len(plainLine) {
-					// Re-highlight with cursor inserted
-					lineWithCursor := plainLine[:m.cursor.col] + "█" + plainLine[m.cursor.col+1:]
-					if m.highlighter != nil {
-						line = m.highlighter.HighlightMarkdownLine(lineWithCursor)
+				line = ""
+			}
+		}
+
+		// Apply syntax highlighting first
+		displayLine := line
+		if m.highlighter != nil {
+			if inCodeBlock, lang := m.isInCodeBlock(lineNum); inCodeBlock {
+				displayLine = m.highlighter.HighlightCodeBlock(line, lang)
+			} else {
+				displayLine = m.highlighter.HighlightMarkdownLine(line)
+			}
+		}
+
+		// Show cursor if this is the cursor line and we're in the visible area
+		if lineNum == m.cursor.row && m.cursorBlink {
+			// Calculate cursor position considering horizontal scrolling
+			cursorPos := m.cursor.col - m.viewport.offsetCol
+			if cursorPos >= 0 && cursorPos <= len(line)-m.viewport.offsetCol {
+				// Insert cursor at the correct position
+				if cursorPos == len(line)-m.viewport.offsetCol {
+					displayLine += "█"
+				} else if cursorPos < len(displayLine) {
+					// Insert cursor in the middle of the line
+					runes := []rune(displayLine)
+					if cursorPos < len(runes) {
+						displayLine = string(runes[:cursorPos]) + "█" + string(runes[cursorPos:])
+					} else {
+						displayLine += "█"
 					}
 				}
 			}
 		}
 
-		lines[i] = line
+		lines[i] = displayLine
 	}
 
-	content := strings.Join(lines, "\n")
-
-	style := lipgloss.NewStyle().
-		Width(m.width - 6). // Account for window border and padding
-		Height(height).
-		Padding(1).
-		Foreground(lipgloss.Color(CTPText)).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(CTPSurface2))
-
-	return style.Render(content)
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) renderPreview(height int) string {
-	// Join all content lines
 	markdown := strings.Join(m.content, "\n")
 
-	// If content is empty, show placeholder
 	if strings.TrimSpace(markdown) == "" {
-		placeholder := "No content to preview\n\nStart typing in the editor to see a live preview here!"
-		style := lipgloss.NewStyle().
-			Width(m.width - 6). // Account for window border and padding
-			Height(height).
-			Padding(1).
-			Foreground(lipgloss.Color(CTPSubtext0)).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color(CTPBlue)).
-			Align(lipgloss.Left)
-		return style.Render(placeholder)
+		return "No content to preview"
 	}
 
 	// Render markdown using glamour
@@ -334,130 +270,116 @@ func (m Model) renderPreview(height int) string {
 		rendered = "Renderer not initialized"
 	}
 
-	// Style the preview
-	style := lipgloss.NewStyle().
-		Width(m.width - 6). // Account for window border and padding
-		Height(height).
-		Padding(1).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(CTPBlue))
-
-	return style.Render(rendered)
-}
-
-func (m Model) htmlToText(html string) string {
-	// This is a very basic HTML to text converter
-	// In a real implementation, you'd want to use a proper HTML parser
-	// and convert to terminal formatting
-
-	text := html
-
-	// Remove HTML tags (basic)
-	text = strings.ReplaceAll(text, "<p>", "")
-	text = strings.ReplaceAll(text, "</p>", "\n\n")
-	text = strings.ReplaceAll(text, "<h1>", "# ")
-	text = strings.ReplaceAll(text, "</h1>", "\n\n")
-	text = strings.ReplaceAll(text, "<h2>", "## ")
-	text = strings.ReplaceAll(text, "</h2>", "\n\n")
-	text = strings.ReplaceAll(text, "<h3>", "### ")
-	text = strings.ReplaceAll(text, "</h3>", "\n\n")
-	text = strings.ReplaceAll(text, "<strong>", "**")
-	text = strings.ReplaceAll(text, "</strong>", "**")
-	text = strings.ReplaceAll(text, "<em>", "*")
-	text = strings.ReplaceAll(text, "</em>", "*")
-	text = strings.ReplaceAll(text, "<li>", "• ")
-	text = strings.ReplaceAll(text, "</li>", "\n")
-	text = strings.ReplaceAll(text, "<ul>", "")
-	text = strings.ReplaceAll(text, "</ul>", "\n")
-	text = strings.ReplaceAll(text, "<ol>", "")
-	text = strings.ReplaceAll(text, "</ol>", "\n")
-	text = strings.ReplaceAll(text, "<br>", "\n")
-	text = strings.ReplaceAll(text, "<hr>", "---\n")
-
-	return text
-}
-
-func (m *Model) toggleTab() {
-	if m.activeTab == TabEditor {
-		m.activeTab = TabPreview
-	} else {
-		m.activeTab = TabEditor
-	}
-}
-
-func (m Model) renderHelpBar() string {
-	// Define help text based on current mode and tab
-	var helpText string
-	if m.activeTab == TabEditor {
-		if m.mode == ModeInsert {
-			helpText = "ESC: Normal | TAB: Preview | CTRL+V: Paste | CTRL+S: Save | CTRL+Q: Quit"
-		} else {
-			helpText = "I: Insert | X: Delete | TAB: Preview | CTRL+S: Save | CTRL+Q: Quit"
-		}
-	} else {
-		helpText = "TAB: Editor | CTRL+S: Save | CTRL+Q: Quit"
-	}
-
-	// Style the help bar
-	helpStyle := lipgloss.NewStyle().
-		Width(m.width - 6). // Account for window border and padding
-		Background(lipgloss.Color(CTPMantle)).
-		Foreground(lipgloss.Color(CTPSubtext0)).
-		Align(lipgloss.Center).
-		Padding(0, 1)
-
-	return helpStyle.Render(helpText)
+	return rendered
 }
 
 func (m Model) renderStatusBar() string {
-	var status string
-
-	// Colorful mode indicators
 	var modeStr string
 	if m.mode == ModeInsert {
-		modeStr = lipgloss.NewStyle().Foreground(lipgloss.Color(CTPPink)).Bold(true).Render("INSERT")
+		modeStr = "INSERT"
 	} else {
-		modeStr = lipgloss.NewStyle().Foreground(lipgloss.Color(CTPBlue)).Bold(true).Render("NORMAL")
+		modeStr = "NORMAL"
 	}
 
-	// File status with colors
 	var fileStatus string
 	if m.filename != "" {
-		fileStatus = lipgloss.NewStyle().Foreground(lipgloss.Color(CTPGreen)).Render(m.filename)
+		fileStatus = m.filename
 		if !m.saved {
-			fileStatus += lipgloss.NewStyle().Foreground(lipgloss.Color(CTPRed)).Render(" [modified]")
+			fileStatus += " [modified]"
 		}
 	} else {
-		fileStatus = lipgloss.NewStyle().Foreground(lipgloss.Color(CTPPeach)).Render("[New File]")
+		fileStatus = "[New File]"
 		if !m.saved {
-			fileStatus += lipgloss.NewStyle().Foreground(lipgloss.Color(CTPRed)).Render(" [modified]")
+			fileStatus += " [modified]"
 		}
 	}
 
-	// Position with color
-	position := lipgloss.NewStyle().Foreground(lipgloss.Color(CTPTeal)).Render(fmt.Sprintf("(%d,%d)", m.cursor.row+1, m.cursor.col+1))
-
-	leftSide := fmt.Sprintf(" %s | %s", modeStr, fileStatus)
-	rightSide := fmt.Sprintf("%s ", position)
+	position := fmt.Sprintf("(%d,%d)", m.cursor.row+1, m.cursor.col+1)
 
 	if m.statusMsg != "" {
-		leftSide = fmt.Sprintf(" %s", m.statusMsg)
+		return m.statusMsg
 	}
 
-	// Calculate spacing
-	totalWidth := m.width - 6 // Account for window border and padding
-	usedWidth := len(leftSide) + len(rightSide)
-	spacing := totalWidth - usedWidth
-	if spacing < 0 {
-		spacing = 0
+	return fmt.Sprintf(" %s | %s | %s ", modeStr, fileStatus, position)
+}
+
+func (m Model) renderTabBar() string {
+	activeStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("#7D56F4")).
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Padding(0, 1).
+		Bold(true)
+
+	inactiveStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("#3C3C3C")).
+		Foreground(lipgloss.Color("#CCCCCC")).
+		Padding(0, 1)
+
+	var editorTab, previewTab string
+
+	if m.activeTab == TabEditor {
+		editorTab = activeStyle.Render("Editor")
+		previewTab = inactiveStyle.Render("Preview")
+	} else {
+		editorTab = inactiveStyle.Render("Editor")
+		previewTab = activeStyle.Render("Preview")
 	}
 
-	status = leftSide + strings.Repeat(" ", spacing) + rightSide
+	// Add spacing and instructions
+	spacer := strings.Repeat(" ", max(0, m.width-len("Editor")-len("Preview")-20))
+	instructions := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#666666")).
+		Render("Tab/Shift+Tab to switch")
 
-	style := lipgloss.NewStyle().
-		Width(m.width - 6). // Account for window border and padding
-		Background(lipgloss.Color(CTPSurface0)).
-		Foreground(lipgloss.Color(CTPText))
+	return editorTab + previewTab + spacer + instructions
+}
 
-	return style.Render(status)
+// rebuildCodeBlocks analyzes the content and identifies code blocks
+func (m *Model) rebuildCodeBlocks() {
+	m.codeBlocks = []CodeBlock{}
+	inCodeBlock := false
+	var currentBlock CodeBlock
+
+	for i, line := range m.content {
+		if strings.HasPrefix(line, "```") {
+			if !inCodeBlock {
+				// Start of code block
+				inCodeBlock = true
+				currentBlock = CodeBlock{
+					start: i,
+					lang:  strings.TrimSpace(strings.TrimPrefix(line, "```")),
+				}
+			} else {
+				// End of code block
+				inCodeBlock = false
+				currentBlock.end = i
+				m.codeBlocks = append(m.codeBlocks, currentBlock)
+			}
+		}
+	}
+
+	// Handle unclosed code block
+	if inCodeBlock {
+		currentBlock.end = len(m.content) - 1
+		m.codeBlocks = append(m.codeBlocks, currentBlock)
+	}
+}
+
+// isInCodeBlock checks if a line is inside a code block
+func (m *Model) isInCodeBlock(lineNum int) (bool, string) {
+	for _, block := range m.codeBlocks {
+		// Include lines within the code block content (not the fences)
+		if lineNum > block.start && lineNum < block.end {
+			return true, block.lang
+		}
+	}
+	return false, ""
+}
+
+// isCodeFence checks if a line is a code fence (``` line)
+func (m *Model) isCodeFence(lineNum int) bool {
+	if lineNum >= len(m.content) {
+		return false
+	}
+	return strings.HasPrefix(m.content[lineNum], "```")
 }
