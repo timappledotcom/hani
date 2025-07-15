@@ -1,0 +1,457 @@
+package main
+
+import (
+	"io/ioutil"
+	"strings"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Clear status message after a short time
+	if m.statusMsg != "" {
+		m.statusMsg = ""
+	}
+
+	switch msg.String() {
+	case "ctrl+c", "ctrl+q":
+		return m, tea.Quit
+
+	case "ctrl+s":
+		return m.saveFile()
+
+	case "tab":
+		if m.activeTab == TabEditor {
+			m.activeTab = TabPreview
+		} else {
+			m.activeTab = TabEditor
+		}
+		return m, nil
+
+	case "shift+tab":
+		if m.activeTab == TabEditor {
+			m.activeTab = TabPreview
+		} else {
+			m.activeTab = TabEditor
+		}
+		return m, nil
+	}
+
+	// Only handle editor keys when on editor tab
+	if m.activeTab == TabEditor {
+		switch m.mode {
+		case ModeNormal:
+			return m.handleNormalMode(msg)
+		case ModeInsert:
+			return m.handleInsertMode(msg)
+		}
+	}
+
+	return m, nil
+}
+
+func (m Model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "h", "left":
+		m.cursor.col = max(0, m.cursor.col-1)
+		m.adjustViewport()
+		return m, nil
+
+	case "j", "down":
+		if m.cursor.row < len(m.content)-1 {
+			m.cursor.row++
+			// Adjust column if the new line is shorter
+			if m.cursor.col > len(m.content[m.cursor.row]) {
+				m.cursor.col = len(m.content[m.cursor.row])
+			}
+		}
+		m.adjustViewport()
+		return m, nil
+
+	case "k", "up":
+		if m.cursor.row > 0 {
+			m.cursor.row--
+			// Adjust column if the new line is shorter
+			if m.cursor.col > len(m.content[m.cursor.row]) {
+				m.cursor.col = len(m.content[m.cursor.row])
+			}
+		}
+		m.adjustViewport()
+		return m, nil
+
+	case "l", "right":
+		if m.cursor.col < len(m.content[m.cursor.row]) {
+			m.cursor.col++
+		}
+		m.adjustViewport()
+		return m, nil
+
+	case "0":
+		m.cursor.col = 0
+		m.adjustViewport()
+		return m, nil
+
+	case "$":
+		m.cursor.col = len(m.content[m.cursor.row])
+		m.adjustViewport()
+		return m, nil
+
+	case "gg":
+		m.cursor.row = 0
+		m.cursor.col = 0
+		m.adjustViewport()
+		return m, nil
+
+	case "G":
+		m.cursor.row = len(m.content) - 1
+		m.cursor.col = len(m.content[m.cursor.row])
+		m.adjustViewport()
+		return m, nil
+
+	case "i":
+		m.mode = ModeInsert
+		return m, nil
+
+	case "a":
+		m.mode = ModeInsert
+		if m.cursor.col < len(m.content[m.cursor.row]) {
+			m.cursor.col++
+		}
+		return m, nil
+
+	case "A":
+		m.mode = ModeInsert
+		m.cursor.col = len(m.content[m.cursor.row])
+		return m, nil
+
+	case "o":
+		m.mode = ModeInsert
+		// Insert new line after current line
+		newLine := ""
+		m.content = append(m.content[:m.cursor.row+1], append([]string{newLine}, m.content[m.cursor.row+1:]...)...)
+		m.cursor.row++
+		m.cursor.col = 0
+		m.saved = false
+		m.adjustViewport()
+		return m, nil
+
+	case "O":
+		m.mode = ModeInsert
+		// Insert new line before current line
+		newLine := ""
+		m.content = append(m.content[:m.cursor.row], append([]string{newLine}, m.content[m.cursor.row:]...)...)
+		m.cursor.col = 0
+		m.saved = false
+		m.adjustViewport()
+		return m, nil
+
+	case "x":
+		// Delete character under cursor
+		if m.cursor.col < len(m.content[m.cursor.row]) {
+			line := m.content[m.cursor.row]
+			m.content[m.cursor.row] = line[:m.cursor.col] + line[m.cursor.col+1:]
+			m.saved = false
+		}
+		return m, nil
+
+	case "dd":
+		// Delete current line
+		if len(m.content) > 1 {
+			m.content = append(m.content[:m.cursor.row], m.content[m.cursor.row+1:]...)
+			if m.cursor.row >= len(m.content) {
+				m.cursor.row = len(m.content) - 1
+			}
+			if m.cursor.col > len(m.content[m.cursor.row]) {
+				m.cursor.col = len(m.content[m.cursor.row])
+			}
+			m.saved = false
+		} else {
+			m.content[0] = ""
+			m.cursor.col = 0
+			m.saved = false
+		}
+		m.adjustViewport()
+		return m, nil
+
+	case "w":
+		// Move to next word
+		m.cursor = m.nextWord()
+		m.adjustViewport()
+		return m, nil
+
+	case "b":
+		// Move to previous word
+		m.cursor = m.prevWord()
+		m.adjustViewport()
+		return m, nil
+
+	case "e":
+		// Move to end of current word
+		m.cursor = m.endOfWord()
+		m.adjustViewport()
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m Model) handleInsertMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = ModeNormal
+		if m.cursor.col > 0 {
+			m.cursor.col--
+		}
+		return m, nil
+
+	case "left":
+		m.cursor.col = max(0, m.cursor.col-1)
+		m.adjustViewport()
+		return m, nil
+
+	case "right":
+		if m.cursor.col < len(m.content[m.cursor.row]) {
+			m.cursor.col++
+		}
+		m.adjustViewport()
+		return m, nil
+
+	case "up":
+		if m.cursor.row > 0 {
+			m.cursor.row--
+			// Adjust column if the new line is shorter
+			if m.cursor.col > len(m.content[m.cursor.row]) {
+				m.cursor.col = len(m.content[m.cursor.row])
+			}
+		}
+		m.adjustViewport()
+		return m, nil
+
+	case "down":
+		if m.cursor.row < len(m.content)-1 {
+			m.cursor.row++
+			// Adjust column if the new line is shorter
+			if m.cursor.col > len(m.content[m.cursor.row]) {
+				m.cursor.col = len(m.content[m.cursor.row])
+			}
+		}
+		m.adjustViewport()
+		return m, nil
+
+	case "enter":
+		// Split line at cursor position
+		currentLine := m.content[m.cursor.row]
+		beforeCursor := currentLine[:m.cursor.col]
+		afterCursor := currentLine[m.cursor.col:]
+
+		m.content[m.cursor.row] = beforeCursor
+		m.content = append(m.content[:m.cursor.row+1], append([]string{afterCursor}, m.content[m.cursor.row+1:]...)...)
+
+		m.cursor.row++
+		m.cursor.col = 0
+		m.saved = false
+		m.adjustViewport()
+		return m, nil
+
+	case "backspace":
+		if m.cursor.col > 0 {
+			// Delete character before cursor
+			line := m.content[m.cursor.row]
+			m.content[m.cursor.row] = line[:m.cursor.col-1] + line[m.cursor.col:]
+			m.cursor.col--
+			m.saved = false
+		} else if m.cursor.row > 0 {
+			// Join with previous line
+			prevLine := m.content[m.cursor.row-1]
+			currentLine := m.content[m.cursor.row]
+			m.content[m.cursor.row-1] = prevLine + currentLine
+			m.content = append(m.content[:m.cursor.row], m.content[m.cursor.row+1:]...)
+			m.cursor.row--
+			m.cursor.col = len(prevLine)
+			m.saved = false
+		}
+		m.adjustViewport()
+		return m, nil
+
+	case "delete":
+		if m.cursor.col < len(m.content[m.cursor.row]) {
+			// Delete character at cursor
+			line := m.content[m.cursor.row]
+			m.content[m.cursor.row] = line[:m.cursor.col] + line[m.cursor.col+1:]
+			m.saved = false
+		}
+		return m, nil
+
+	default:
+		// Insert character
+		if len(msg.String()) == 1 {
+			char := msg.String()
+			line := m.content[m.cursor.row]
+			m.content[m.cursor.row] = line[:m.cursor.col] + char + line[m.cursor.col:]
+			m.cursor.col++
+			m.saved = false
+		}
+		return m, nil
+	}
+}
+
+func (m Model) adjustViewport() {
+	contentHeight := m.height - 7 // Tab bar + status bar + help bar + window border
+
+	// Vertical scrolling
+	if m.cursor.row < m.viewport.offsetRow {
+		m.viewport.offsetRow = m.cursor.row
+	} else if m.cursor.row >= m.viewport.offsetRow+contentHeight {
+		m.viewport.offsetRow = m.cursor.row - contentHeight + 1
+	}
+
+	// Horizontal scrolling (simplified)
+	if m.cursor.col < m.viewport.offsetCol {
+		m.viewport.offsetCol = m.cursor.col
+	} else if m.cursor.col >= m.viewport.offsetCol+m.width-2 {
+		m.viewport.offsetCol = m.cursor.col - m.width + 3
+	}
+}
+
+func (m Model) saveFile() (tea.Model, tea.Cmd) {
+	filename := m.filename
+	if filename == "" {
+		filename = "untitled.md"
+		m.filename = filename
+	}
+
+	content := strings.Join(m.content, "\n")
+	err := ioutil.WriteFile(filename, []byte(content), 0644)
+
+	if err != nil {
+		m.statusMsg = "Error saving file: " + err.Error()
+		return m, tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
+			return tea.KeyMsg{}
+		})
+	}
+
+	m.saved = true
+	m.statusMsg = "File saved: " + filename
+	return m, tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
+		return tea.KeyMsg{}
+	})
+}
+
+// Word movement functions
+func (m Model) nextWord() Position {
+	row := m.cursor.row
+	col := m.cursor.col
+
+	if row >= len(m.content) {
+		return Position{row: len(m.content) - 1, col: len(m.content[len(m.content)-1])}
+	}
+
+	line := m.content[row]
+
+	// Skip current word
+	for col < len(line) && line[col] != ' ' && line[col] != '\t' {
+		col++
+	}
+
+	// Skip whitespace
+	for col < len(line) && (line[col] == ' ' || line[col] == '\t') {
+		col++
+	}
+
+	// If we're at the end of the line, move to next line
+	if col >= len(line) && row < len(m.content)-1 {
+		row++
+		col = 0
+		// Skip leading whitespace on next line
+		if row < len(m.content) {
+			line = m.content[row]
+			for col < len(line) && (line[col] == ' ' || line[col] == '\t') {
+				col++
+			}
+		}
+	}
+
+	return Position{row: row, col: col}
+}
+
+func (m Model) prevWord() Position {
+	row := m.cursor.row
+	col := m.cursor.col
+
+	if col > 0 {
+		col--
+	} else if row > 0 {
+		row--
+		col = len(m.content[row])
+	}
+
+	if row < 0 || row >= len(m.content) {
+		return Position{row: 0, col: 0}
+	}
+
+	line := m.content[row]
+
+	// Skip whitespace
+	for col > 0 && (line[col] == ' ' || line[col] == '\t') {
+		col--
+	}
+
+	// Skip word
+	for col > 0 && line[col] != ' ' && line[col] != '\t' {
+		col--
+	}
+
+	// Move to start of word
+	if col > 0 && (line[col] == ' ' || line[col] == '\t') {
+		col++
+	}
+
+	return Position{row: row, col: col}
+}
+
+func (m Model) endOfWord() Position {
+	row := m.cursor.row
+	col := m.cursor.col
+
+	if row >= len(m.content) {
+		return Position{row: len(m.content) - 1, col: len(m.content[len(m.content)-1])}
+	}
+
+	line := m.content[row]
+
+	// If we're at the end of a word, move to next word first
+	if col < len(line) && line[col] != ' ' && line[col] != '\t' {
+		col++
+	}
+
+	// Skip whitespace
+	for col < len(line) && (line[col] == ' ' || line[col] == '\t') {
+		col++
+	}
+
+	// Move to end of word
+	for col < len(line) && line[col] != ' ' && line[col] != '\t' {
+		col++
+	}
+
+	if col > 0 {
+		col--
+	}
+
+	return Position{row: row, col: col}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
