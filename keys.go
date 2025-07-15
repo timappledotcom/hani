@@ -2,6 +2,7 @@ package main
 
 import (
 	"io/ioutil"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -147,10 +148,17 @@ func (m Model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "x":
-		// Delete character under cursor
+		// Delete character under cursor (vim-style, continues across lines)
 		if m.cursor.col < len(m.content[m.cursor.row]) {
 			line := m.content[m.cursor.row]
 			m.content[m.cursor.row] = line[:m.cursor.col] + line[m.cursor.col+1:]
+			m.saved = false
+		} else if m.cursor.row < len(m.content)-1 {
+			// At end of line, join with next line
+			currentLine := m.content[m.cursor.row]
+			nextLine := m.content[m.cursor.row+1]
+			m.content[m.cursor.row] = currentLine + nextLine
+			m.content = append(m.content[:m.cursor.row+1], m.content[m.cursor.row+2:]...)
 			m.saved = false
 		}
 		return m, nil
@@ -280,6 +288,52 @@ func (m Model) handleInsertMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			line := m.content[m.cursor.row]
 			m.content[m.cursor.row] = line[:m.cursor.col] + line[m.cursor.col+1:]
 			m.saved = false
+		} else if m.cursor.row < len(m.content)-1 {
+			// At end of line, join with next line
+			currentLine := m.content[m.cursor.row]
+			nextLine := m.content[m.cursor.row+1]
+			m.content[m.cursor.row] = currentLine + nextLine
+			m.content = append(m.content[:m.cursor.row+1], m.content[m.cursor.row+2:]...)
+			m.saved = false
+		}
+		return m, nil
+
+	case "ctrl+v":
+		// Paste from clipboard
+		clipboard := getClipboard()
+		if clipboard != "" {
+			// Split clipboard content by lines
+			lines := strings.Split(clipboard, "\n")
+			if len(lines) == 1 {
+				// Single line paste
+				line := m.content[m.cursor.row]
+				m.content[m.cursor.row] = line[:m.cursor.col] + clipboard + line[m.cursor.col:]
+				m.cursor.col += len(clipboard)
+			} else {
+				// Multi-line paste
+				currentLine := m.content[m.cursor.row]
+				beforeCursor := currentLine[:m.cursor.col]
+				afterCursor := currentLine[m.cursor.col:]
+				
+				// First line: before cursor + first line of paste
+				m.content[m.cursor.row] = beforeCursor + lines[0]
+				
+				// Insert middle lines
+				newLines := lines[1 : len(lines)-1]
+				for i, line := range newLines {
+					m.content = append(m.content[:m.cursor.row+1+i], append([]string{line}, m.content[m.cursor.row+1+i:]...)...)
+				}
+				
+				// Last line: last line of paste + after cursor
+				lastLine := lines[len(lines)-1] + afterCursor
+				m.content = append(m.content[:m.cursor.row+len(lines)-1], append([]string{lastLine}, m.content[m.cursor.row+len(lines)-1:]...)...)
+				
+				// Update cursor position
+				m.cursor.row += len(lines) - 1
+				m.cursor.col = len(lines[len(lines)-1])
+			}
+			m.saved = false
+			m.adjustViewport()
 		}
 		return m, nil
 
@@ -440,6 +494,32 @@ func (m Model) endOfWord() Position {
 	}
 
 	return Position{row: row, col: col}
+}
+
+// getClipboard attempts to get clipboard content using xclip or wl-clipboard
+func getClipboard() string {
+	// Try xclip first (X11)
+	cmd := exec.Command("xclip", "-o", "-selection", "clipboard")
+	output, err := cmd.Output()
+	if err == nil {
+		return strings.TrimRight(string(output), "\n")
+	}
+
+	// Try wl-paste (Wayland)
+	cmd = exec.Command("wl-paste")
+	output, err = cmd.Output()
+	if err == nil {
+		return strings.TrimRight(string(output), "\n")
+	}
+
+	// Try pbpaste (macOS)
+	cmd = exec.Command("pbpaste")
+	output, err = cmd.Output()
+	if err == nil {
+		return strings.TrimRight(string(output), "\n")
+	}
+
+	return ""
 }
 
 func max(a, b int) int {

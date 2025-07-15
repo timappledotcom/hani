@@ -369,9 +369,9 @@ func (m Model) renderHelpBar() string {
 	var helpText string
 	if m.activeTab == TabEditor {
 		if m.mode == ModeInsert {
-			helpText = "ESC: Normal | TAB: Preview | CTRL+S: Save | CTRL+Q: Quit | Arrow Keys: Navigate"
+			helpText = "ESC: Normal | TAB: Preview | CTRL+V: Paste | CTRL+S: Save | CTRL+Q: Quit"
 		} else {
-			helpText = "I: Insert | TAB: Preview | CTRL+S: Save | CTRL+Q: Quit | HJKL/Arrows: Navigate"
+			helpText = "I: Insert | X: Delete | TAB: Preview | CTRL+S: Save | CTRL+Q: Quit"
 		}
 	} else {
 		helpText = "TAB: Editor | CTRL+S: Save | CTRL+Q: Quit"
