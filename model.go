@@ -65,6 +65,7 @@ type Model struct {
 	height      int
 	viewport    Viewport
 	renderer    *glamour.TermRenderer
+	highlighter *SyntaxHighlighter
 	saved       bool
 	statusMsg   string
 	cursorBlink bool
@@ -106,6 +107,9 @@ func NewModel(filename string) Model {
 		glamour.WithEnvironmentConfig(),
 		glamour.WithWordWrap(80),
 	)
+	
+	// Initialize syntax highlighter
+	highlighter := NewSyntaxHighlighter()
 
 	return Model{
 		filename:    filename,
@@ -115,6 +119,7 @@ func NewModel(filename string) Model {
 		activeTab:   TabEditor,
 		viewport:    Viewport{offsetRow: 0, offsetCol: 0},
 		renderer:    renderer,
+		highlighter: highlighter,
 		saved:       saved,
 		cursorBlink: true,
 	}
@@ -251,21 +256,37 @@ func (m Model) renderEditor(height int) string {
 		}
 
 		line := m.content[lineNum]
-		// Show cursor in current line
-		if lineNum == m.cursor.row && m.cursor.col <= len(line) {
+		
+		// Apply syntax highlighting to the line
+		if m.highlighter != nil {
+			line = m.highlighter.highlightMarkdownLine(line)
+		}
+		
+		// Show cursor in current line (after highlighting)
+		if lineNum == m.cursor.row && m.cursor.col <= len(m.content[lineNum]) {
 			cursorChar := " "
 			if m.cursorBlink {
-				cursorChar = "█"
+				cursorChar = lipgloss.NewStyle().Background(lipgloss.Color(CTPText)).Foreground(lipgloss.Color(CTPBase)).Render("█")
 			}
-			if m.cursor.col == len(line) {
+			
+			// Insert cursor at the right position
+			originalLine := m.content[lineNum]
+			if m.cursor.col == len(originalLine) {
 				line += cursorChar
 			} else {
-				line = line[:m.cursor.col] + cursorChar + line[m.cursor.col+1:]
+				// For cursor insertion with syntax highlighting, we need to be more careful
+				// This is a simplified approach - in a more complex editor, you'd want
+				// to handle this with proper cursor positioning after highlighting
+				plainLine := m.content[lineNum]
+				if m.cursor.col < len(plainLine) {
+					// Re-highlight with cursor inserted
+					lineWithCursor := plainLine[:m.cursor.col] + "█" + plainLine[m.cursor.col+1:]
+					if m.highlighter != nil {
+						line = m.highlighter.highlightMarkdownLine(lineWithCursor)
+					}
+				}
 			}
 		}
-
-		// Apply text color to the line
-		line = lipgloss.NewStyle().Foreground(lipgloss.Color(CTPText)).Render(line)
 
 		lines[i] = line
 	}
