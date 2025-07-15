@@ -351,20 +351,52 @@ func (m Model) handleInsertMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) adjustViewport() {
-	contentHeight := m.height - 7 // Tab bar + status bar + help bar + window border
-
-	// Vertical scrolling
-	if m.cursor.row < m.viewport.offsetRow {
-		m.viewport.offsetRow = m.cursor.row
-	} else if m.cursor.row >= m.viewport.offsetRow+contentHeight {
-		m.viewport.offsetRow = m.cursor.row - contentHeight + 1
+	// Calculate the actual content height available for editor text
+	// This needs to account for:
+	// - Window border (top + bottom = 2)
+	// - Status bar (1)
+	// - Help bar (1)
+	// - Editor border (top + bottom = 2)
+	// - Editor padding (top + bottom = 2)
+	// Total: 8 lines of UI overhead
+	contentHeight := m.height - 8
+	
+	// Ensure we have a minimum height
+	if contentHeight < 1 {
+		contentHeight = 1
 	}
 
-	// Horizontal scrolling (simplified)
+	// Vertical scrolling with improved logic
+	if m.cursor.row < m.viewport.offsetRow {
+		// Cursor moved above visible area, scroll up
+		m.viewport.offsetRow = m.cursor.row
+	} else if m.cursor.row >= m.viewport.offsetRow+contentHeight {
+		// Cursor moved below visible area, scroll down
+		m.viewport.offsetRow = m.cursor.row - contentHeight + 1
+	}
+	
+	// Ensure viewport doesn't go negative
+	if m.viewport.offsetRow < 0 {
+		m.viewport.offsetRow = 0
+	}
+
+	// Horizontal scrolling with improved logic
+	contentWidth := m.width - 8 // Account for window border + editor border + padding
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	
 	if m.cursor.col < m.viewport.offsetCol {
+		// Cursor moved left of visible area, scroll left
 		m.viewport.offsetCol = m.cursor.col
-	} else if m.cursor.col >= m.viewport.offsetCol+m.width-2 {
-		m.viewport.offsetCol = m.cursor.col - m.width + 3
+	} else if m.cursor.col >= m.viewport.offsetCol+contentWidth {
+		// Cursor moved right of visible area, scroll right
+		m.viewport.offsetCol = m.cursor.col - contentWidth + 1
+	}
+	
+	// Ensure horizontal viewport doesn't go negative
+	if m.viewport.offsetCol < 0 {
+		m.viewport.offsetCol = 0
 	}
 }
 
