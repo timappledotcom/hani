@@ -14,12 +14,12 @@ type Config struct {
 	ShowNumbers bool `json:"show_line_numbers"`
 
 	// Theme settings
-	Theme      string `json:"theme"`
-	DarkMode   bool   `json:"dark_mode"`
+	Theme    string `json:"theme"`
+	DarkMode bool   `json:"dark_mode"`
 
 	// Behavior settings
-	AutoSave   bool `json:"auto_save"`
-	BlinkRate  int  `json:"cursor_blink_rate_ms"`
+	AutoSave  bool `json:"auto_save"`
+	BlinkRate int  `json:"cursor_blink_rate_ms"`
 }
 
 // DefaultConfig returns the default configuration

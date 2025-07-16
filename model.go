@@ -13,13 +13,15 @@ import (
 
 // Configuration constants
 const (
-	DefaultWordWrap     = 80
-	MaxWordWrap        = 120
-	MinWordWrap        = 40
-	WordWrapMargin     = 10
-	CursorBlinkRate    = 500 * time.Millisecond
-	StatusMsgDuration  = 2 * time.Second
-	ErrorMsgDuration   = 3 * time.Second
+	DefaultWordWrap   = 80
+	MaxWordWrap       = 120
+	MinWordWrap       = 40
+	WordWrapMargin    = 10
+	CursorBlinkRate   = 500 * time.Millisecond
+	StatusMsgDuration = 2 * time.Second
+	ErrorMsgDuration  = 3 * time.Second
+	MaxFileSize       = 10 * 1024 * 1024 // 10MB limit
+	UIOverhead        = 5                // Lines used for UI elements
 )
 
 type Mode int
@@ -37,21 +39,25 @@ const (
 )
 
 type Model struct {
-	filename      string
-	content       []string
-	cursor        Position
-	mode          Mode
-	activeTab     Tab
-	width         int
-	height        int
-	viewport      Viewport
-	previewOffset int
-	renderer      *glamour.TermRenderer
-	highlighter   *SyntaxHighlighter
-	saved         bool
-	statusMsg     string
-	cursorBlink   bool
-	codeBlocks    []CodeBlock
+	filename         string
+	content          []string
+	cursor           Position
+	mode             Mode
+	activeTab        Tab
+	width            int
+	height           int
+	viewport         Viewport
+	previewOffset    int
+	renderer         *glamour.TermRenderer
+	highlighter      *SyntaxHighlighter
+	saved            bool
+	statusMsg        string
+	statusMsgTimeout time.Time
+	cursorBlink      bool
+	codeBlocks       []CodeBlock
+	codeBlocksDirty  bool
+	config           Config
+	lastError        error
 }
 
 type Position struct {
@@ -76,55 +82,116 @@ func NewModel(filename string) Model {
 	content := []string{""}
 	saved := false
 	var statusMsg string
+	var lastError error
+
+	// Load configuration
+	config := LoadConfig()
 
 	// Load file if it exists
 	if filename != "" {
-		if data, err := os.ReadFile(filename); err == nil {
-			content = strings.Split(string(data), "\n")
-			if len(content) > 0 && content[len(content)-1] == "" {
-				content = content[:len(content)-1]
+		if info, err := os.Stat(filename); err == nil {
+			// Check file size
+			if info.Size() > MaxFileSize {
+				statusMsg = fmt.Sprintf("File too large (%d MB). Maximum size is %d MB",
+					info.Size()/(1024*1024), MaxFileSize/(1024*1024))
+				lastError = fmt.Errorf("file too large: %d bytes", info.Size())
+			} else if data, err := os.ReadFile(filename); err == nil {
+				// Check if file is binary
+				if isBinaryFile(data) {
+					statusMsg = "Cannot edit binary file: " + filename
+					lastError = fmt.Errorf("binary file detected")
+				} else {
+					content = strings.Split(string(data), "\n")
+					if len(content) > 0 && content[len(content)-1] == "" {
+						content = content[:len(content)-1]
+					}
+					saved = true
+				}
+			} else {
+				statusMsg = "Error reading file: " + err.Error()
+				lastError = err
+				saved = false
 			}
-			saved = true
 		} else {
-			// File doesn't exist or can't be read - show status message
-			statusMsg = "Could not load file: " + filename + " (starting with new file)"
+			// File doesn't exist - this is okay for new files
+			statusMsg = "New file: " + filename
 			saved = false
 		}
 	} else {
 		saved = true
 	}
 
-	// Initialize glamour renderer with defaults
+	// Initialize glamour renderer with configuration
+	wordWrap := config.WordWrap
+	if wordWrap == 0 {
+		wordWrap = DefaultWordWrap
+	}
+
 	renderer, err := glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(DefaultWordWrap), // Will be updated when window size is known
+		glamour.WithWordWrap(wordWrap),
 	)
 	if err != nil {
 		// Fallback to nil renderer if initialization fails
 		renderer = nil
+		if lastError == nil {
+			lastError = fmt.Errorf("failed to initialize markdown renderer: %w", err)
+		}
 	}
 
 	// Initialize syntax highlighter
 	highlighter := NewSyntaxHighlighter()
+	if highlighter == nil && lastError == nil {
+		lastError = fmt.Errorf("failed to initialize syntax highlighter")
+	}
 
 	m := Model{
-		filename:    filename,
-		content:     content,
-		cursor:      Position{row: 0, col: 0},
-		mode:        ModeNormal,
-		activeTab:   TabEditor,
-		viewport:    Viewport{offsetRow: 0, offsetCol: 0},
-		renderer:    renderer,
-		highlighter: highlighter,
-		saved:       saved,
-		statusMsg:   statusMsg,
-		cursorBlink: true,
+		filename:         filename,
+		content:          content,
+		cursor:           Position{row: 0, col: 0},
+		mode:             ModeNormal,
+		activeTab:        TabEditor,
+		viewport:         Viewport{offsetRow: 0, offsetCol: 0},
+		renderer:         renderer,
+		highlighter:      highlighter,
+		saved:            saved,
+		statusMsg:        statusMsg,
+		statusMsgTimeout: time.Now().Add(StatusMsgDuration),
+		cursorBlink:      true,
+		codeBlocksDirty:  true,
+		config:           config,
+		lastError:        lastError,
 	}
 
 	// Initialize code blocks
 	m.rebuildCodeBlocks()
 
 	return m
+}
+
+// isBinaryFile checks if the file content appears to be binary
+func isBinaryFile(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+
+	// Check for null bytes in first 512 bytes (common binary indicator)
+	checkLen := min(len(data), 512)
+	for i := 0; i < checkLen; i++ {
+		if data[i] == 0 {
+			return true
+		}
+	}
+
+	// Check for high ratio of non-printable characters
+	nonPrintable := 0
+	for i := 0; i < checkLen; i++ {
+		if data[i] < 32 && data[i] != 9 && data[i] != 10 && data[i] != 13 {
+			nonPrintable++
+		}
+	}
+
+	return float64(nonPrintable)/float64(checkLen) > 0.3
 }
 
 func (m Model) Init() tea.Cmd {
@@ -134,13 +201,18 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Clear expired status messages
+	if m.statusMsg != "" && time.Now().After(m.statusMsgTimeout) {
+		m.statusMsg = ""
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 
 		// Update glamour renderer with new word wrap based on width
-		if m.width > 20 {
+		if m.width > 20 && m.renderer != nil {
 			wordWrap := m.width - WordWrapMargin
 			if wordWrap > MaxWordWrap {
 				wordWrap = MaxWordWrap
@@ -153,6 +225,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				glamour.WithWordWrap(wordWrap),
 			); err == nil {
 				m.renderer = renderer
+			} else {
+				m.setStatusMsg("Warning: Failed to update renderer", false)
 			}
 		}
 
@@ -169,6 +243,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// setStatusMsg sets a status message with timeout
+func (m *Model) setStatusMsg(msg string, isError bool) {
+	m.statusMsg = msg
+	if isError {
+		m.statusMsgTimeout = time.Now().Add(ErrorMsgDuration)
+	} else {
+		m.statusMsgTimeout = time.Now().Add(StatusMsgDuration)
+	}
 }
 
 func (m Model) View() string {
@@ -204,44 +288,34 @@ func (m Model) renderEditor(height int) string {
 			continue
 		}
 
-		line := m.content[lineNum]
+		originalLine := m.content[lineNum]
 
-		// Handle horizontal scrolling
+		// Handle horizontal scrolling on original line
+		visibleLine := originalLine
 		if m.viewport.offsetCol > 0 {
-			if m.viewport.offsetCol < len(line) {
-				line = line[m.viewport.offsetCol:]
+			if m.viewport.offsetCol < len(originalLine) {
+				visibleLine = originalLine[m.viewport.offsetCol:]
 			} else {
-				line = ""
+				visibleLine = ""
 			}
 		}
 
-		// Apply syntax highlighting first
-		displayLine := line
+		// Apply syntax highlighting to visible portion
+		displayLine := visibleLine
 		if m.highlighter != nil {
 			if inCodeBlock, lang := m.isInCodeBlock(lineNum); inCodeBlock {
-				displayLine = m.highlighter.HighlightCodeBlock(line, lang)
+				displayLine = m.highlighter.HighlightCodeBlock(visibleLine, lang)
 			} else {
-				displayLine = m.highlighter.HighlightMarkdownLine(line)
+				displayLine = m.highlighter.HighlightMarkdownLine(visibleLine)
 			}
 		}
 
-		// Show cursor if this is the cursor line and we're in the visible area
+		// Add cursor if this is the cursor line and cursor is visible
 		if lineNum == m.cursor.row && m.cursorBlink {
-			// Calculate cursor position considering horizontal scrolling
 			cursorPos := m.cursor.col - m.viewport.offsetCol
-			if cursorPos >= 0 && cursorPos <= len(line)-m.viewport.offsetCol {
-				// Insert cursor at the correct position
-				if cursorPos == len(line)-m.viewport.offsetCol {
-					displayLine += "█"
-				} else if cursorPos < len(displayLine) {
-					// Insert cursor in the middle of the line
-					runes := []rune(displayLine)
-					if cursorPos < len(runes) {
-						displayLine = string(runes[:cursorPos]) + "█" + string(runes[cursorPos:])
-					} else {
-						displayLine += "█"
-					}
-				}
+			if cursorPos >= 0 && cursorPos <= len(visibleLine) {
+				// Insert cursor without breaking syntax highlighting
+				displayLine = m.insertCursor(displayLine, visibleLine, cursorPos)
 			}
 		}
 
@@ -249,6 +323,57 @@ func (m Model) renderEditor(height int) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// insertCursor safely inserts cursor into display line
+func (m Model) insertCursor(displayLine, originalLine string, cursorPos int) string {
+	if cursorPos >= len(originalLine) {
+		// Cursor at end of line
+		return displayLine + "█"
+	}
+
+	// For syntax highlighted text, we need to be careful about ANSI codes
+	// Simple approach: convert to runes and insert cursor
+	displayRunes := []rune(displayLine)
+	originalRunes := []rune(originalLine)
+
+	// If display line is longer due to ANSI codes, find the right position
+	if len(displayRunes) > len(originalRunes) {
+		// Count visible characters up to cursor position
+		visibleChars := 0
+		insertPos := 0
+		inAnsiCode := false
+
+		for i, r := range displayRunes {
+			if r == '\x1b' {
+				inAnsiCode = true
+			} else if inAnsiCode && r == 'm' {
+				inAnsiCode = false
+				insertPos = i + 1
+				continue
+			}
+
+			if !inAnsiCode {
+				if visibleChars == cursorPos {
+					insertPos = i
+					break
+				}
+				visibleChars++
+				insertPos = i + 1
+			}
+		}
+
+		if insertPos <= len(displayRunes) {
+			return string(displayRunes[:insertPos]) + "█" + string(displayRunes[insertPos:])
+		}
+	}
+
+	// Fallback: simple insertion
+	if cursorPos < len(displayRunes) {
+		return string(displayRunes[:cursorPos]) + "█" + string(displayRunes[cursorPos:])
+	}
+
+	return displayLine + "█"
 }
 
 func (m Model) renderPreview(height int) string {
@@ -274,6 +399,11 @@ func (m Model) renderPreview(height int) string {
 }
 
 func (m Model) renderStatusBar() string {
+	// Show status message if active and not expired
+	if m.statusMsg != "" && time.Now().Before(m.statusMsgTimeout) {
+		return m.statusMsg
+	}
+
 	var modeStr string
 	if m.mode == ModeInsert {
 		modeStr = "INSERT"
@@ -296,11 +426,13 @@ func (m Model) renderStatusBar() string {
 
 	position := fmt.Sprintf("(%d,%d)", m.cursor.row+1, m.cursor.col+1)
 
-	if m.statusMsg != "" {
-		return m.statusMsg
+	// Show error indicator if there's a last error
+	errorIndicator := ""
+	if m.lastError != nil {
+		errorIndicator = " ⚠️"
 	}
 
-	return fmt.Sprintf(" %s | %s | %s ", modeStr, fileStatus, position)
+	return fmt.Sprintf(" %s | %s | %s%s ", modeStr, fileStatus, position, errorIndicator)
 }
 
 func (m Model) renderTabBar() string {
@@ -336,6 +468,11 @@ func (m Model) renderTabBar() string {
 
 // rebuildCodeBlocks analyzes the content and identifies code blocks
 func (m *Model) rebuildCodeBlocks() {
+	// Only rebuild if dirty
+	if !m.codeBlocksDirty {
+		return
+	}
+
 	m.codeBlocks = []CodeBlock{}
 	inCodeBlock := false
 	var currentBlock CodeBlock
@@ -363,6 +500,8 @@ func (m *Model) rebuildCodeBlocks() {
 		currentBlock.end = len(m.content) - 1
 		m.codeBlocks = append(m.codeBlocks, currentBlock)
 	}
+
+	m.codeBlocksDirty = false
 }
 
 // isInCodeBlock checks if a line is inside a code block
