@@ -215,11 +215,37 @@ func (m Model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) handlePreviewMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "j", "down":
-		m.previewOffset++
+		// Calculate max scroll based on rendered content
+		markdown := strings.Join(m.content, "\n")
+		if strings.TrimSpace(markdown) != "" && m.renderer != nil {
+			if rendered, err := m.renderer.Render(markdown); err == nil {
+				lines := strings.Split(rendered, "\n")
+				contentHeight := m.height - 5 // Account for UI overhead
+				maxOffset := max(0, len(lines)-contentHeight)
+				if m.previewOffset < maxOffset {
+					m.previewOffset++
+				}
+			}
+		}
 		return m, nil
 	case "k", "up":
 		if m.previewOffset > 0 {
 			m.previewOffset--
+		}
+		return m, nil
+	case "g":
+		// Go to top
+		m.previewOffset = 0
+		return m, nil
+	case "G":
+		// Go to bottom
+		markdown := strings.Join(m.content, "\n")
+		if strings.TrimSpace(markdown) != "" && m.renderer != nil {
+			if rendered, err := m.renderer.Render(markdown); err == nil {
+				lines := strings.Split(rendered, "\n")
+				contentHeight := m.height - 5 // Account for UI overhead
+				m.previewOffset = max(0, len(lines)-contentHeight)
+			}
 		}
 		return m, nil
 	}

@@ -62,6 +62,12 @@ hani document.md
 - `Delete` - Delete character at cursor
 - Any printable character - Insert character
 
+### Preview Mode
+- `j` / `Down` - Scroll preview down
+- `k` / `Up` - Scroll preview up
+- `g` - Go to top of preview
+- `G` - Go to bottom of preview
+
 ## Project Structure
 
 ```

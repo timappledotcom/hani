@@ -296,3 +296,37 @@ func TestIsWhitespace(t *testing.T) {
 		t.Errorf("Letter 'a' should not be whitespace")
 	}
 }
+
+func TestPreviewScrolling(t *testing.T) {
+	m := NewModel("")
+	m.content = []string{
+		"# Header 1",
+		"Content line 1",
+		"Content line 2",
+		"## Header 2",
+		"More content",
+		"Even more content",
+		"Final line",
+	}
+	m.width = 80
+	m.height = 10
+
+	// Test initial preview offset
+	if m.previewOffset != 0 {
+		t.Errorf("Initial preview offset should be 0, got %d", m.previewOffset)
+	}
+
+	// Test scrolling down
+	m.previewOffset = 2
+	preview := m.renderPreview(5)
+	if preview == "" {
+		t.Errorf("Preview should not be empty after scrolling")
+	}
+
+	// Test bounds checking in renderPreview
+	m.previewOffset = 1000 // Very large offset
+	preview = m.renderPreview(5)
+	if preview == "" {
+		t.Errorf("Preview should handle large offsets gracefully")
+	}
+}

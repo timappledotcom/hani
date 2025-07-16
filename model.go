@@ -395,7 +395,35 @@ func (m Model) renderPreview(height int) string {
 		rendered = "Renderer not initialized"
 	}
 
-	return rendered
+	// Apply scrolling by splitting into lines and applying offset
+	lines := strings.Split(rendered, "\n")
+
+	// Calculate safe offset bounds
+	offset := m.previewOffset
+	if offset < 0 {
+		offset = 0
+	}
+	maxOffset := max(0, len(lines)-height)
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+
+	// Get the visible portion based on offset and height
+	startLine := offset
+	endLine := min(startLine+height, len(lines))
+
+	if startLine >= len(lines) {
+		return "End of preview"
+	}
+
+	visibleLines := lines[startLine:endLine]
+
+	// Pad with empty lines if needed to fill the height
+	for len(visibleLines) < height {
+		visibleLines = append(visibleLines, "")
+	}
+
+	return strings.Join(visibleLines, "\n")
 }
 
 func (m Model) renderStatusBar() string {
