@@ -3,11 +3,11 @@
 # Build script for hani packages
 set -e
 
-VERSION="1.0.1"
+VERSION="1.2.0"
 ARCH="amd64"
 
 echo "🏗️  Building hani binary..."
-make build
+mise exec -- make build
 
 echo "📦 Creating package directories..."
 mkdir -p hani_deb_package/DEBIAN hani_deb_package/usr/bin
@@ -24,7 +24,7 @@ Version: $VERSION
 Section: editors
 Priority: optional
 Architecture: $ARCH
-Maintainer: Tim <tim@example.com>
+Maintainer: Tim Apple <timappledotcom@users.noreply.github.com>
 Description: A TUI Markdown Editor
  Hani is a terminal-based markdown editor with vim-like keybindings
  and live preview functionality. Built with Go and Bubbletea.
@@ -81,8 +81,12 @@ chmod +x %{buildroot}/usr/bin/hani
 /usr/bin/hani
 
 %changelog
-* $(date "+%a %b %d %Y") Tim <tim@example.com> - $VERSION-1
-- Initial release
+* $(date "+%a %b %d %Y") Tim Apple <timappledotcom@users.noreply.github.com> - $VERSION-1
+- Major stability and feature release
+- Added comprehensive test suite
+- Enhanced syntax highlighting
+- Improved error handling and performance
+- Production-ready with robust file management
 EOF
 
 # Copy binary to SOURCES
