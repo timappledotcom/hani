@@ -70,6 +70,28 @@
 ## 🚀 Getting Started
 
 ### Installation
+
+#### Option 1: Download Pre-built Packages
+**Debian/Ubuntu (.deb)**:
+```bash
+wget https://github.com/timappledotcom/hani/releases/download/v1.2.0/hani_1.2.0_amd64.deb
+sudo dpkg -i hani_1.2.0_amd64.deb
+```
+
+**RedHat/Fedora/SUSE (.rpm)**:
+```bash
+wget https://github.com/timappledotcom/hani/releases/download/v1.2.0/hani_1.2.0_x86_64.rpm
+sudo rpm -i hani_1.2.0_x86_64.rpm
+```
+
+**Direct Binary Download**:
+```bash
+wget https://github.com/timappledotcom/hani/releases/download/v1.2.0/hani
+chmod +x hani
+sudo mv hani /usr/local/bin/
+```
+
+#### Option 2: Build from Source
 ```bash
 git clone https://github.com/timappledotcom/hani.git
 cd hani
