@@ -83,8 +83,8 @@ hani/
 
 ### Editor Tab
 - Full vim-like navigation and editing
-- Syntax highlighting for markdown
-- Line numbers and cursor position
+- Clean, distraction-free plain text editing
+- Clear cursor indication and position tracking
 - Real-time file modification tracking
 
 ### Preview Tab

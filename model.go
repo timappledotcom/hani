@@ -300,15 +300,8 @@ func (m Model) renderEditor(height int) string {
 			}
 		}
 
-		// Apply syntax highlighting to visible portion
+		// Use plain text without syntax highlighting for clean editing experience
 		displayLine := visibleLine
-		if m.highlighter != nil {
-			if inCodeBlock, lang := m.isInCodeBlock(lineNum); inCodeBlock {
-				displayLine = m.highlighter.HighlightCodeBlock(visibleLine, lang)
-			} else {
-				displayLine = m.highlighter.HighlightMarkdownLine(visibleLine)
-			}
-		}
 
 		// Add cursor if this is the cursor line and cursor is visible
 		if lineNum == m.cursor.row && m.cursorBlink {
@@ -332,43 +325,8 @@ func (m Model) insertCursor(displayLine, originalLine string, cursorPos int) str
 		return displayLine + "█"
 	}
 
-	// For syntax highlighted text, we need to be careful about ANSI codes
-	// Simple approach: convert to runes and insert cursor
+	// Simple cursor insertion for plain text
 	displayRunes := []rune(displayLine)
-	originalRunes := []rune(originalLine)
-
-	// If display line is longer due to ANSI codes, find the right position
-	if len(displayRunes) > len(originalRunes) {
-		// Count visible characters up to cursor position
-		visibleChars := 0
-		insertPos := 0
-		inAnsiCode := false
-
-		for i, r := range displayRunes {
-			if r == '\x1b' {
-				inAnsiCode = true
-			} else if inAnsiCode && r == 'm' {
-				inAnsiCode = false
-				insertPos = i + 1
-				continue
-			}
-
-			if !inAnsiCode {
-				if visibleChars == cursorPos {
-					insertPos = i
-					break
-				}
-				visibleChars++
-				insertPos = i + 1
-			}
-		}
-
-		if insertPos <= len(displayRunes) {
-			return string(displayRunes[:insertPos]) + "█" + string(displayRunes[insertPos:])
-		}
-	}
-
-	// Fallback: simple insertion
 	if cursorPos < len(displayRunes) {
 		return string(displayRunes[:cursorPos]) + "█" + string(displayRunes[cursorPos:])
 	}
