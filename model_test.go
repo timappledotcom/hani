@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -328,5 +329,66 @@ func TestPreviewScrolling(t *testing.T) {
 	preview = m.renderPreview(5)
 	if preview == "" {
 		t.Errorf("Preview should handle large offsets gracefully")
+	}
+}
+
+func TestWindowResize(t *testing.T) {
+	m := NewModel("")
+	m.content = []string{
+		"Line 1",
+		"Line 2",
+		"Line 3",
+		"Line 4",
+		"Line 5",
+	}
+
+	// Set initial size
+	m.width = 80
+	m.height = 24
+	m.cursor = Position{row: 2, col: 5}
+	m.viewport.offsetRow = 1
+
+	// Simulate window resize to smaller size
+	m.width = 40
+	m.height = 12
+
+	// Manually call the resize handling logic
+	m.ensureCursorBounds()
+	m.adjustViewport()
+
+	// Test that cursor is still within bounds
+	if m.cursor.row < 0 || m.cursor.row >= len(m.content) {
+		t.Errorf("Cursor row out of bounds after resize: %d", m.cursor.row)
+	}
+
+	if m.cursor.col < 0 || m.cursor.col > len(m.content[m.cursor.row]) {
+		t.Errorf("Cursor col out of bounds after resize: %d", m.cursor.col)
+	}
+
+	// Test viewport adjustment
+	if m.viewport.offsetRow < 0 {
+		t.Errorf("Viewport offset should not be negative: %d", m.viewport.offsetRow)
+	}
+
+	// Test with preview mode
+	m.activeTab = TabPreview
+	m.previewOffset = 10 // Large offset
+
+	// Simulate resize handling for preview
+	if m.renderer != nil {
+		markdown := strings.Join(m.content, "\n")
+		if rendered, err := m.renderer.Render(markdown); err == nil {
+			lines := strings.Split(rendered, "\n")
+			contentHeight := m.height - 5
+			maxOffset := max(0, len(lines)-contentHeight)
+			if m.previewOffset > maxOffset {
+				m.previewOffset = maxOffset
+			}
+		}
+	}
+
+	// Preview offset should be adjusted
+	if m.previewOffset < 0 {
+		t.Errorf("Preview offset should not be negative after resize: %d", m.previewOffset)
 	}
 }

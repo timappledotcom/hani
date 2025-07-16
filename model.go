@@ -230,6 +230,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// Adjust viewport and cursor bounds after resize
+		m.ensureCursorBounds()
+		m.adjustViewport()
+
+		// Reset preview offset if it's now out of bounds
+		if m.activeTab == TabPreview {
+			markdown := strings.Join(m.content, "\n")
+			if strings.TrimSpace(markdown) != "" && m.renderer != nil {
+				if rendered, err := m.renderer.Render(markdown); err == nil {
+					lines := strings.Split(rendered, "\n")
+					contentHeight := m.height - UIOverhead
+					maxOffset := max(0, len(lines)-contentHeight)
+					if m.previewOffset > maxOffset {
+						m.previewOffset = maxOffset
+					}
+				}
+			}
+		}
+
 		return m, nil
 
 	case tea.KeyMsg:
