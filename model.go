@@ -21,7 +21,44 @@ const (
 	StatusMsgDuration = 2 * time.Second
 	ErrorMsgDuration  = 3 * time.Second
 	MaxFileSize       = 10 * 1024 * 1024 // 10MB limit
-	UIOverhead        = 6                // Lines used for UI elements (tab bar, status bar, footer)
+)
+
+// Define reusable styles
+var (
+	activeTabStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("#7D56F4")).
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Padding(0, 1).
+			Bold(true)
+
+	inactiveTabStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("#3C3C3C")).
+				Foreground(lipgloss.Color("#CCCCCC")).
+				Padding(0, 1)
+
+	statusBarStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("#1E1E1E")).
+			Foreground(lipgloss.Color("#CCCCCC")).
+			Padding(0, 1)
+
+	footerStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("#2D2D2D")).
+			Foreground(lipgloss.Color("#CCCCCC")).
+			Padding(0, 1)
+
+	keyStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#7D56F4")).
+			Bold(true)
+
+	separatorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#666666"))
+
+	contentStyle = lipgloss.NewStyle().
+			Padding(0)
+
+	errorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF6B6B")).
+			Bold(true)
 )
 
 type Mode int
@@ -240,7 +277,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if strings.TrimSpace(markdown) != "" && m.renderer != nil {
 				if rendered, err := m.renderer.Render(markdown); err == nil {
 					lines := strings.Split(rendered, "\n")
-					contentHeight := m.height - UIOverhead
+					contentHeight := m.height - 3 // tab + status + footer
 					maxOffset := max(0, len(lines)-contentHeight)
 					if m.previewOffset > maxOffset {
 						m.previewOffset = maxOffset
@@ -279,25 +316,55 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
-	// Create tab bar
+	// Ensure minimum height
+	if m.height < 6 {
+		return lipgloss.NewStyle().
+			Width(m.width).
+			Height(m.height).
+			Align(lipgloss.Center, lipgloss.Center).
+			Render("Terminal too small")
+	}
+
+	// Define base styles
+	containerStyle := lipgloss.NewStyle().
+		Width(m.width).
+		Height(m.height)
+
+	// Create UI elements with proper styling
 	tabBar := m.renderTabBar()
+	statusBar := m.renderStatusBar()
+	footer := m.renderFooter()
 
-	contentHeight := m.height - UIOverhead // Account for tab bar, status bar, and footer
+	// Calculate content area height (total - UI elements)
+	contentHeight := m.height - 3 // tab + status + footer
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+
+	// Create content with proper styling
 	var content string
-
 	if m.activeTab == TabEditor {
 		content = m.renderEditor(contentHeight)
 	} else {
 		content = m.renderPreview(contentHeight)
 	}
 
-	// Status bar
-	statusBar := m.renderStatusBar()
+	// Style the content area
+	contentStyle := lipgloss.NewStyle().
+		Width(m.width).
+		Height(contentHeight)
 
-	// Footer with key commands
-	footer := m.renderFooter()
+	styledContent := contentStyle.Render(content)
 
-	return lipgloss.JoinVertical(lipgloss.Top, tabBar, content, statusBar, footer)
+	// Use Lipgloss to properly layout the entire view
+	return containerStyle.Render(
+		lipgloss.JoinVertical(lipgloss.Top,
+			tabBar,
+			styledContent,
+			statusBar,
+			footer,
+		),
+	)
 }
 
 func (m Model) renderEditor(height int) string {
@@ -409,16 +476,25 @@ func (m Model) renderPreview(height int) string {
 func (m Model) renderStatusBar() string {
 	// Show status message if active and not expired
 	if m.statusMsg != "" && time.Now().Before(m.statusMsgTimeout) {
-		return m.statusMsg
+		style := statusBarStyle
+		if m.lastError != nil {
+			style = errorStyle.Copy().Background(lipgloss.Color("#1E1E1E")).Padding(0, 1)
+		}
+		return style.Width(m.width).Render(m.statusMsg)
 	}
 
+	// Mode indicator
 	var modeStr string
+	var modeStyle lipgloss.Style
 	if m.mode == ModeInsert {
 		modeStr = "INSERT"
+		modeStyle = keyStyle.Copy().Background(lipgloss.Color("#7D56F4")).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1)
 	} else {
 		modeStr = "NORMAL"
+		modeStyle = lipgloss.NewStyle().Background(lipgloss.Color("#4A4A4A")).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1)
 	}
 
+	// File status
 	var fileStatus string
 	if m.filename != "" {
 		fileStatus = m.filename
@@ -432,59 +508,69 @@ func (m Model) renderStatusBar() string {
 		}
 	}
 
+	// Position
 	position := fmt.Sprintf("(%d,%d)", m.cursor.row+1, m.cursor.col+1)
 
-	// Show error indicator if there's a last error
+	// Error indicator
 	errorIndicator := ""
 	if m.lastError != nil {
-		errorIndicator = " ⚠️"
+		errorIndicator = errorStyle.Render(" ⚠️")
 	}
 
-	return fmt.Sprintf(" %s | %s | %s%s ", modeStr, fileStatus, position, errorIndicator)
+	// Use Lipgloss to layout the status bar
+	leftSection := lipgloss.JoinHorizontal(lipgloss.Left,
+		modeStyle.Render(modeStr),
+		statusBarStyle.Render(" "+fileStatus+" "),
+	)
+
+	rightSection := lipgloss.JoinHorizontal(lipgloss.Right,
+		statusBarStyle.Render(position),
+		errorIndicator,
+	)
+
+	// Calculate spacing
+	usedWidth := lipgloss.Width(leftSection) + lipgloss.Width(rightSection)
+	spacerWidth := max(0, m.width-usedWidth)
+	spacer := strings.Repeat(" ", spacerWidth)
+
+	return statusBarStyle.Width(m.width).Render(
+		lipgloss.JoinHorizontal(lipgloss.Left, leftSection, spacer, rightSection),
+	)
 }
 
 func (m Model) renderTabBar() string {
-	activeStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("#7D56F4")).
-		Foreground(lipgloss.Color("#FFFFFF")).
-		Padding(0, 1).
-		Bold(true)
-
-	inactiveStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("#3C3C3C")).
-		Foreground(lipgloss.Color("#CCCCCC")).
-		Padding(0, 1)
-
+	// Use the global styles we defined
 	var editorTab, previewTab string
 
 	if m.activeTab == TabEditor {
-		editorTab = activeStyle.Render("Editor")
-		previewTab = inactiveStyle.Render("Preview")
+		editorTab = activeTabStyle.Render("Editor")
+		previewTab = inactiveTabStyle.Render("Preview")
 	} else {
-		editorTab = inactiveStyle.Render("Editor")
-		previewTab = activeStyle.Render("Preview")
+		editorTab = inactiveTabStyle.Render("Editor")
+		previewTab = activeTabStyle.Render("Preview")
 	}
 
-	// Add spacing and instructions
-	spacer := strings.Repeat(" ", max(0, m.width-len("Editor")-len("Preview")-20))
-	instructions := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#666666")).
-		Render("Tab/Shift+Tab to switch")
+	// Create tabs section
+	tabsSection := lipgloss.JoinHorizontal(lipgloss.Left, editorTab, previewTab)
 
-	return editorTab + previewTab + spacer + instructions
+	// Instructions section
+	instructions := separatorStyle.Render("Tab/Shift+Tab to switch")
+
+	// Use Lipgloss to properly layout the tab bar with responsive spacing
+	return lipgloss.NewStyle().
+		Width(m.width).
+		Background(lipgloss.Color("#1E1E1E")).
+		Render(
+			lipgloss.JoinHorizontal(lipgloss.Left,
+				tabsSection,
+				lipgloss.NewStyle().Width(m.width-lipgloss.Width(tabsSection)-lipgloss.Width(instructions)).Render(""),
+				instructions,
+			),
+		)
 }
 
 // renderFooter renders the footer with key command hints
 func (m Model) renderFooter() string {
-	footerStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("#2D2D2D")).
-		Foreground(lipgloss.Color("#CCCCCC")).
-		Padding(0, 1)
-
-	keyStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#7D56F4")).
-		Bold(true)
-
 	var commands []string
 
 	if m.activeTab == TabEditor {
@@ -520,17 +606,15 @@ func (m Model) renderFooter() string {
 		}
 	}
 
-	// Join commands with separators
-	commandText := strings.Join(commands, "  "+lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render("│")+"  ")
+	// Use Lipgloss to join commands with separators
+	separator := separatorStyle.Render(" │ ")
+	commandText := strings.Join(commands, separator)
 
-	// Calculate available width for commands
-	availableWidth := m.width - 2 // Account for padding
-	if len(commandText) > availableWidth {
-		// Truncate if too long
-		commandText = commandText[:availableWidth-3] + "..."
-	}
-
-	return footerStyle.Width(m.width).Render(commandText)
+	// Use the global footerStyle and let Lipgloss handle width and truncation
+	return footerStyle.
+		Width(m.width).
+		MaxWidth(m.width).
+		Render(commandText)
 }
 
 // rebuildCodeBlocks analyzes the content and identifies code blocks

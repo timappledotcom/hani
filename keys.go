@@ -220,7 +220,7 @@ func (m *Model) handlePreviewMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if strings.TrimSpace(markdown) != "" && m.renderer != nil {
 			if rendered, err := m.renderer.Render(markdown); err == nil {
 				lines := strings.Split(rendered, "\n")
-				contentHeight := m.height - 5 // Account for UI overhead
+				contentHeight := m.height - 3 // tab + status + footer
 				maxOffset := max(0, len(lines)-contentHeight)
 				if m.previewOffset < maxOffset {
 					m.previewOffset++
@@ -243,7 +243,7 @@ func (m *Model) handlePreviewMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if strings.TrimSpace(markdown) != "" && m.renderer != nil {
 			if rendered, err := m.renderer.Render(markdown); err == nil {
 				lines := strings.Split(rendered, "\n")
-				contentHeight := m.height - 5 // Account for UI overhead
+				contentHeight := m.height - 3 // tab + status + footer
 				m.previewOffset = max(0, len(lines)-contentHeight)
 			}
 		}
@@ -434,7 +434,7 @@ func (m *Model) adjustViewport() {
 	m.ensureCursorBounds()
 
 	// Calculate the actual content height available for editor text
-	contentHeight := m.height - UIOverhead
+	contentHeight := m.height - 3 // tab + status + footer
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
@@ -458,7 +458,7 @@ func (m *Model) adjustViewport() {
 	}
 
 	// Horizontal scrolling with improved logic
-	contentWidth := m.width - UIOverhead
+	contentWidth := m.width - 3 // account for UI elements
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
