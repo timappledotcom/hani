@@ -3,7 +3,7 @@
 # Build script for hani packages
 set -e
 
-VERSION="1.2.3"
+VERSION="1.2.4"
 ARCH="amd64"
 
 echo "🏗️  Building hani binary..."

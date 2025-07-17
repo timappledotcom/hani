@@ -21,7 +21,7 @@ const (
 	StatusMsgDuration = 2 * time.Second
 	ErrorMsgDuration  = 3 * time.Second
 	MaxFileSize       = 10 * 1024 * 1024 // 10MB limit
-	UIOverhead        = 5                // Lines used for UI elements
+	UIOverhead        = 6                // Lines used for UI elements (tab bar, status bar, footer)
 )
 
 type Mode int
@@ -282,7 +282,7 @@ func (m Model) View() string {
 	// Create tab bar
 	tabBar := m.renderTabBar()
 
-	contentHeight := m.height - 5 // Account for tab bar and status bar
+	contentHeight := m.height - UIOverhead // Account for tab bar, status bar, and footer
 	var content string
 
 	if m.activeTab == TabEditor {
@@ -294,7 +294,10 @@ func (m Model) View() string {
 	// Status bar
 	statusBar := m.renderStatusBar()
 
-	return lipgloss.JoinVertical(lipgloss.Top, tabBar, content, statusBar)
+	// Footer with key commands
+	footer := m.renderFooter()
+
+	return lipgloss.JoinVertical(lipgloss.Top, tabBar, content, statusBar, footer)
 }
 
 func (m Model) renderEditor(height int) string {
@@ -469,6 +472,65 @@ func (m Model) renderTabBar() string {
 		Render("Tab/Shift+Tab to switch")
 
 	return editorTab + previewTab + spacer + instructions
+}
+
+// renderFooter renders the footer with key command hints
+func (m Model) renderFooter() string {
+	footerStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("#2D2D2D")).
+		Foreground(lipgloss.Color("#CCCCCC")).
+		Padding(0, 1)
+
+	keyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#7D56F4")).
+		Bold(true)
+
+	var commands []string
+
+	if m.activeTab == TabEditor {
+		if m.mode == ModeNormal {
+			// Normal mode commands
+			commands = []string{
+				keyStyle.Render("i") + " Insert",
+				keyStyle.Render("Tab") + " Preview",
+				keyStyle.Render("Ctrl+S") + " Save",
+				keyStyle.Render("o") + " New Line",
+				keyStyle.Render("dd") + " Delete Line",
+				keyStyle.Render("Ctrl+Q") + " Quit",
+			}
+		} else {
+			// Insert mode commands
+			commands = []string{
+				keyStyle.Render("Esc") + " Normal",
+				keyStyle.Render("Tab") + " Preview",
+				keyStyle.Render("Ctrl+S") + " Save",
+				keyStyle.Render("Enter") + " New Line",
+				keyStyle.Render("Ctrl+V") + " Paste",
+				keyStyle.Render("Ctrl+Q") + " Quit",
+			}
+		}
+	} else {
+		// Preview mode commands
+		commands = []string{
+			keyStyle.Render("Tab") + " Editor",
+			keyStyle.Render("j/k") + " Scroll",
+			keyStyle.Render("g/G") + " Top/Bottom",
+			keyStyle.Render("Ctrl+S") + " Save",
+			keyStyle.Render("Ctrl+Q") + " Quit",
+		}
+	}
+
+	// Join commands with separators
+	commandText := strings.Join(commands, "  "+lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render("│")+"  ")
+
+	// Calculate available width for commands
+	availableWidth := m.width - 2 // Account for padding
+	if len(commandText) > availableWidth {
+		// Truncate if too long
+		commandText = commandText[:availableWidth-3] + "..."
+	}
+
+	return footerStyle.Width(m.width).Render(commandText)
 }
 
 // rebuildCodeBlocks analyzes the content and identifies code blocks
