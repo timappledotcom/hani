@@ -7,7 +7,7 @@ import (
 
 // Version information - update these when releasing new versions
 const (
-	Version   = "1.2.5"
+	Version   = "1.2.6"
 	BuildDate = "2025-01-16"
 	GitCommit = "dev"
 )

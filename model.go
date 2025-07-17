@@ -245,11 +245,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		oldWidth := m.width
 		m.width = msg.Width
 		m.height = msg.Height
 
-		// Update glamour renderer with new word wrap based on width
-		if m.width > 20 && m.renderer != nil {
+		// Only update glamour renderer if width changed significantly (performance optimization)
+		if m.width > 20 && m.renderer != nil && abs(m.width-oldWidth) > 10 {
 			wordWrap := m.width - WordWrapMargin
 			if wordWrap > MaxWordWrap {
 				wordWrap = MaxWordWrap
@@ -271,18 +272,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ensureCursorBounds()
 		m.adjustViewport()
 
-		// Reset preview offset if it's now out of bounds
-		if m.activeTab == TabPreview {
-			markdown := strings.Join(m.content, "\n")
-			if strings.TrimSpace(markdown) != "" && m.renderer != nil {
-				if rendered, err := m.renderer.Render(markdown); err == nil {
-					lines := strings.Split(rendered, "\n")
-					contentHeight := m.height - 3 // tab + status + footer
-					maxOffset := max(0, len(lines)-contentHeight)
-					if m.previewOffset > maxOffset {
-						m.previewOffset = maxOffset
-					}
-				}
+		// Reset preview offset if it's now out of bounds (only if in preview mode)
+		if m.activeTab == TabPreview && m.previewOffset > 0 {
+			contentHeight := m.height - 3 // tab + status + footer
+			// Simple bounds check without expensive rendering
+			if m.previewOffset > contentHeight {
+				m.previewOffset = max(0, m.previewOffset-contentHeight)
 			}
 		}
 
@@ -320,28 +315,22 @@ func (m Model) View() string {
 	if m.height < 6 {
 		return lipgloss.NewStyle().
 			Width(m.width).
-			Height(m.height).
 			Align(lipgloss.Center, lipgloss.Center).
 			Render("Terminal too small")
 	}
 
-	// Define base styles
-	containerStyle := lipgloss.NewStyle().
-		Width(m.width).
-		Height(m.height)
-
-	// Create UI elements with proper styling
+	// Create UI elements
 	tabBar := m.renderTabBar()
 	statusBar := m.renderStatusBar()
 	footer := m.renderFooter()
 
-	// Calculate content area height (total - UI elements)
+	// Calculate content area height more accurately
 	contentHeight := m.height - 3 // tab + status + footer
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
 
-	// Create content with proper styling
+	// Create content
 	var content string
 	if m.activeTab == TabEditor {
 		content = m.renderEditor(contentHeight)
@@ -349,21 +338,12 @@ func (m Model) View() string {
 		content = m.renderPreview(contentHeight)
 	}
 
-	// Style the content area
-	contentStyle := lipgloss.NewStyle().
-		Width(m.width).
-		Height(contentHeight)
-
-	styledContent := contentStyle.Render(content)
-
-	// Use Lipgloss to properly layout the entire view
-	return containerStyle.Render(
-		lipgloss.JoinVertical(lipgloss.Top,
-			tabBar,
-			styledContent,
-			statusBar,
-			footer,
-		),
+	// Simple vertical join without complex container styling
+	return lipgloss.JoinVertical(lipgloss.Top,
+		tabBar,
+		content,
+		statusBar,
+		footer,
 	)
 }
 
@@ -478,7 +458,7 @@ func (m Model) renderStatusBar() string {
 	if m.statusMsg != "" && time.Now().Before(m.statusMsgTimeout) {
 		style := statusBarStyle
 		if m.lastError != nil {
-			style = errorStyle.Copy().Background(lipgloss.Color("#1E1E1E")).Padding(0, 1)
+			style = errorStyle.Background(lipgloss.Color("#1E1E1E")).Padding(0, 1)
 		}
 		return style.Width(m.width).Render(m.statusMsg)
 	}
@@ -488,7 +468,7 @@ func (m Model) renderStatusBar() string {
 	var modeStyle lipgloss.Style
 	if m.mode == ModeInsert {
 		modeStr = "INSERT"
-		modeStyle = keyStyle.Copy().Background(lipgloss.Color("#7D56F4")).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1)
+		modeStyle = keyStyle.Background(lipgloss.Color("#7D56F4")).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1)
 	} else {
 		modeStr = "NORMAL"
 		modeStyle = lipgloss.NewStyle().Background(lipgloss.Color("#4A4A4A")).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1)
