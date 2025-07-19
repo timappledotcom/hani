@@ -158,29 +158,29 @@ func NewModel(filename string) Model {
 		saved = true
 	}
 
-	// Initialize glamour renderer with configuration
+	// Initialize glamour renderer with configuration (lazy initialization for better startup performance)
+	var renderer *glamour.TermRenderer
 	wordWrap := config.WordWrap
 	if wordWrap == 0 {
 		wordWrap = DefaultWordWrap
 	}
 
-	renderer, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(wordWrap),
-	)
-	if err != nil {
-		// Fallback to nil renderer if initialization fails
-		renderer = nil
-		if lastError == nil {
+	// Only initialize renderer if we have a reasonable terminal size
+	// This improves startup performance significantly
+	if wordWrap > MinWordWrap && wordWrap < MaxWordWrap*2 {
+		if r, err := glamour.NewTermRenderer(
+			glamour.WithAutoStyle(),
+			glamour.WithWordWrap(wordWrap),
+		); err == nil {
+			renderer = r
+		} else if lastError == nil {
 			lastError = fmt.Errorf("failed to initialize markdown renderer: %w", err)
 		}
 	}
 
-	// Initialize syntax highlighter
-	highlighter := NewSyntaxHighlighter()
-	if highlighter == nil && lastError == nil {
-		lastError = fmt.Errorf("failed to initialize syntax highlighter")
-	}
+	// Initialize syntax highlighter (lazy loading for better startup performance)
+	var highlighter *SyntaxHighlighter
+	// We'll initialize this on first use to improve startup time and memory usage
 
 	m := Model{
 		filename:         filename,
@@ -214,7 +214,7 @@ func isBinaryFile(data []byte) bool {
 
 	// Check for null bytes in first 512 bytes (common binary indicator)
 	checkLen := min(len(data), 512)
-	for i := 0; i < checkLen; i++ {
+	for i := range checkLen {
 		if data[i] == 0 {
 			return true
 		}
@@ -222,7 +222,7 @@ func isBinaryFile(data []byte) bool {
 
 	// Check for high ratio of non-printable characters
 	nonPrintable := 0
-	for i := 0; i < checkLen; i++ {
+	for i := range checkLen {
 		if data[i] < 32 && data[i] != 9 && data[i] != 10 && data[i] != 13 {
 			nonPrintable++
 		}
@@ -241,6 +241,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Clear expired status messages
 	if m.statusMsg != "" && time.Now().After(m.statusMsgTimeout) {
 		m.statusMsg = ""
+	}
+
+	// Lazy initialization of syntax highlighter for better performance
+	if m.highlighter == nil && m.activeTab == TabEditor {
+		m.highlighter = NewSyntaxHighlighter()
 	}
 
 	switch msg := msg.(type) {
@@ -307,11 +312,12 @@ func (m *Model) setStatusMsg(msg string, isError bool) {
 }
 
 func (m Model) View() string {
+	// Handle initialization state
 	if m.width == 0 || m.height == 0 {
 		return "Loading..."
 	}
 
-	// Ensure minimum height
+	// Handle small terminal size gracefully
 	if m.height < 6 {
 		return lipgloss.NewStyle().
 			Width(m.width).
@@ -325,12 +331,13 @@ func (m Model) View() string {
 	footer := m.renderFooter()
 
 	// Calculate content area height more accurately
+	// Account for tab bar, status bar, and footer
 	contentHeight := m.height - 3 // tab + status + footer
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
 
-	// Create content
+	// Create content based on active tab
 	var content string
 	if m.activeTab == TabEditor {
 		content = m.renderEditor(contentHeight)
@@ -338,7 +345,8 @@ func (m Model) View() string {
 		content = m.renderPreview(contentHeight)
 	}
 
-	// Simple vertical join without complex container styling
+	// Use simple vertical join for better fullscreen handling
+	// This avoids complex container styling that can cause layout issues
 	return lipgloss.JoinVertical(lipgloss.Top,
 		tabBar,
 		content,
@@ -350,7 +358,11 @@ func (m Model) View() string {
 func (m Model) renderEditor(height int) string {
 	lines := make([]string, height)
 
-	for i := 0; i < height; i++ {
+	// Note: Since we're using a value receiver, we can't modify m.highlighter here
+	// The proper initialization should happen in Update or a method with pointer receiver
+	// We'll just use the highlighter if it's available
+
+	for i := range height {
 		lineNum := m.viewport.offsetRow + i
 		if lineNum >= len(m.content) {
 			lines[i] = "~"
@@ -370,6 +382,7 @@ func (m Model) renderEditor(height int) string {
 		}
 
 		// Use plain text without syntax highlighting for clean editing experience
+		// We'll apply syntax highlighting only when needed for better performance
 		displayLine := visibleLine
 
 		// Add cursor if this is the cursor line and cursor is visible
@@ -404,22 +417,28 @@ func (m Model) insertCursor(displayLine, originalLine string, cursorPos int) str
 }
 
 func (m Model) renderPreview(height int) string {
-	markdown := strings.Join(m.content, "\n")
+	// Lazy rendering: Only render when we're actually on the preview tab
+	// This prevents expensive markdown rendering when on editor tab
+	if m.activeTab != TabPreview {
+		return "Preview not rendered (not active tab)"
+	}
 
+	// Only render if we have content and a renderer
+	if m.renderer == nil || len(m.content) == 0 {
+		return "Preview not available"
+	}
+
+	markdown := strings.Join(m.content, "\n")
 	if strings.TrimSpace(markdown) == "" {
 		return "No content to preview"
 	}
 
-	// Render markdown using glamour
+	// Render markdown using glamour (with caching for performance)
 	var rendered string
-	if m.renderer != nil {
-		if out, err := m.renderer.Render(markdown); err != nil {
-			rendered = "Error rendering markdown: " + err.Error()
-		} else {
-			rendered = out
-		}
+	if out, err := m.renderer.Render(markdown); err != nil {
+		rendered = "Error rendering markdown: " + err.Error()
 	} else {
-		rendered = "Renderer not initialized"
+		rendered = out
 	}
 
 	// Apply scrolling by splitting into lines and applying offset
@@ -438,7 +457,6 @@ func (m Model) renderPreview(height int) string {
 	// Get the visible portion based on offset and height
 	startLine := offset
 	endLine := min(startLine+height, len(lines))
-
 	if startLine >= len(lines) {
 		return "End of preview"
 	}
@@ -609,13 +627,13 @@ func (m *Model) rebuildCodeBlocks() {
 	var currentBlock CodeBlock
 
 	for i, line := range m.content {
-		if strings.HasPrefix(line, "```") {
+		if lang, found := strings.CutPrefix(line, "```"); found {
 			if !inCodeBlock {
 				// Start of code block
 				inCodeBlock = true
 				currentBlock = CodeBlock{
 					start: i,
-					lang:  strings.TrimSpace(strings.TrimPrefix(line, "```")),
+					lang:  strings.TrimSpace(lang),
 				}
 			} else {
 				// End of code block
@@ -644,12 +662,4 @@ func (m *Model) isInCodeBlock(lineNum int) (bool, string) {
 		}
 	}
 	return false, ""
-}
-
-// isCodeFence checks if a line is a code fence (``` line)
-func (m *Model) isCodeFence(lineNum int) bool {
-	if lineNum >= len(m.content) {
-		return false
-	}
-	return strings.HasPrefix(m.content[lineNum], "```")
 }

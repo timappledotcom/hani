@@ -46,15 +46,23 @@ func LoadConfig() Config {
 
 	configPath := filepath.Join(homeDir, ".config", "hani", "config.json")
 
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		// Config file doesn't exist, return defaults
+	// Check if file exists before attempting to read (performance optimization)
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		return config
 	}
 
-	if err := json.Unmarshal(data, &config); err != nil {
-		// Invalid config file, return defaults
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		// Config file exists but can't be read, return defaults
 		return config
+	}
+
+	// Only unmarshal if we have actual content (performance optimization)
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &config); err != nil {
+			// Invalid config file, return defaults
+			return config
+		}
 	}
 
 	return config

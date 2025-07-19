@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -213,6 +216,11 @@ func (m Model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handlePreviewMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Only process preview keys if we're actually on the preview tab
+	if m.activeTab != TabPreview {
+		return m, nil
+	}
+
 	switch msg.String() {
 	case "j", "down":
 		// Calculate max scroll based on rendered content
@@ -351,43 +359,83 @@ func (m Model) handleInsertMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "ctrl+v":
-		// Paste from clipboard
+	case "ctrl+v", "ctrl+p", "shift+insert":
+		// Special paste handler to completely avoid render loops with code blocks
 		clipboard := getClipboard()
-		if clipboard != "" {
-			// Split clipboard content by lines
-			lines := strings.Split(clipboard, "\n")
-			if len(lines) == 1 {
-				// Single line paste
-				line := m.content[m.cursor.row]
-				m.content[m.cursor.row] = line[:m.cursor.col] + clipboard + line[m.cursor.col:]
-				m.cursor.col += len(clipboard)
-			} else {
-				// Multi-line paste
-				currentLine := m.content[m.cursor.row]
-				beforeCursor := currentLine[:m.cursor.col]
-				afterCursor := currentLine[m.cursor.col:]
+		if clipboard == "" {
+			return m, nil
+		}
 
-				// First line: before cursor + first line of paste
-				m.content[m.cursor.row] = beforeCursor + lines[0]
+		// Debug: Allow pasting code blocks but track what happens
+		containsCodeBlocks := strings.Contains(clipboard, "```")
+		if containsCodeBlocks {
+			// Log the issue for debugging
+			fmt.Fprintf(os.Stderr, "DEBUG: Pasting code block content, lines=%d\n", len(strings.Split(clipboard, "\n")))
+			m.setStatusMsg("Pasting code block (chunked approach)", false)
+
+			// Try a different approach: paste line by line to avoid overwhelming Bubbletea
+			lines := strings.Split(clipboard, "\n")
+			if len(lines) > 10 { // Only use chunked approach for large pastes
+				// Insert first line normally
+				line := m.content[m.cursor.row]
+				m.content[m.cursor.row] = line[:m.cursor.col] + lines[0]
 
 				// Insert middle lines
-				newLines := lines[1 : len(lines)-1]
-				for i, line := range newLines {
-					m.content = append(m.content[:m.cursor.row+1+i], append([]string{line}, m.content[m.cursor.row+1+i:]...)...)
+				for i := 1; i < len(lines)-1; i++ {
+					m.content = append(m.content[:m.cursor.row+i], append([]string{lines[i]}, m.content[m.cursor.row+i:]...)...)
 				}
 
-				// Last line: last line of paste + after cursor
-				lastLine := lines[len(lines)-1] + afterCursor
-				m.content = append(m.content[:m.cursor.row+len(lines)-1], append([]string{lastLine}, m.content[m.cursor.row+len(lines)-1:]...)...)
+				// Insert last line
+				if len(lines) > 1 {
+					finalLine := lines[len(lines)-1] + line[m.cursor.col:]
+					m.content = append(m.content[:m.cursor.row+len(lines)-1], append([]string{finalLine}, m.content[m.cursor.row+len(lines)-1:]...)...)
+				}
 
-				// Update cursor position
 				m.cursor.row += len(lines) - 1
 				m.cursor.col = len(lines[len(lines)-1])
+				m.saved = false
+				// Completely disable code block tracking for chunked paste operations
+				// m.codeBlocksDirty = true  // DISABLED FOR PASTE
+				fmt.Fprintf(os.Stderr, "DEBUG: Chunked paste complete, content_lines=%d, NO codeBlocksDirty set\n", len(m.content))
+				return m, nil
 			}
-			m.saved = false
-			m.adjustViewport()
 		}
+
+		// Ensure cursor bounds
+		m.ensureCursorBounds()
+
+		lines := strings.Split(clipboard, "\n")
+
+		if len(lines) == 1 {
+			// Single line paste
+			line := m.content[m.cursor.row]
+			m.content[m.cursor.row] = line[:m.cursor.col] + clipboard + line[m.cursor.col:]
+			m.cursor.col += len(clipboard)
+		} else {
+			// Multi-line paste
+			currentLine := m.content[m.cursor.row]
+			beforeCursor := currentLine[:m.cursor.col]
+			afterCursor := currentLine[m.cursor.col:]
+
+			// Build new content
+			newContent := make([]string, 0, len(m.content)+len(lines)-1)
+			newContent = append(newContent, m.content[:m.cursor.row]...)
+			newContent = append(newContent, beforeCursor+lines[0])
+			if len(lines) > 2 {
+				newContent = append(newContent, lines[1:len(lines)-1]...)
+			}
+			newContent = append(newContent, lines[len(lines)-1]+afterCursor)
+			newContent = append(newContent, m.content[m.cursor.row+1:]...)
+
+			m.content = newContent
+			m.cursor.row += len(lines) - 1
+			m.cursor.col = len(lines[len(lines)-1])
+		}
+
+		m.saved = false
+		// Completely disable code block tracking for paste operations to prevent render loops
+		// m.codeBlocksDirty = true  // DISABLED FOR PASTE
+		fmt.Fprintf(os.Stderr, "DEBUG: Paste complete, content_lines=%d, NO codeBlocksDirty set\n", len(m.content))
 		return m, nil
 
 	default:
@@ -644,28 +692,29 @@ func (m Model) endOfWord() Position {
 // getClipboard attempts to get clipboard content using various clipboard tools
 // Returns empty string if no clipboard tool is available or clipboard is empty
 func getClipboard() string {
+	// Set a reasonable timeout for clipboard operations
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	// Try xclip first (X11)
-	cmd := exec.Command("xclip", "-o", "-selection", "clipboard")
-	output, err := cmd.Output()
-	if err == nil {
+	cmd := exec.CommandContext(ctx, "xclip", "-o", "-selection", "clipboard")
+	if output, err := cmd.Output(); err == nil {
 		return strings.TrimRight(string(output), "\n")
 	}
 
 	// Try wl-paste (Wayland)
-	cmd = exec.Command("wl-paste")
-	output, err = cmd.Output()
-	if err == nil {
+	cmd = exec.CommandContext(ctx, "wl-paste")
+	if output, err := cmd.Output(); err == nil {
 		return strings.TrimRight(string(output), "\n")
 	}
 
 	// Try pbpaste (macOS)
-	cmd = exec.Command("pbpaste")
-	output, err = cmd.Output()
-	if err == nil {
+	cmd = exec.CommandContext(ctx, "pbpaste")
+	if output, err := cmd.Output(); err == nil {
 		return strings.TrimRight(string(output), "\n")
 	}
 
-	// No clipboard tool available
+	// No clipboard tool available or all failed
 	return ""
 }
 

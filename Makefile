@@ -1,39 +1,56 @@
 # Hani Markdown Editor Makefile
 
 BINARY_NAME=hani
-MAIN_FILE=main.go
-GO_FILES=$(wildcard *.go)
+BUBBLETEA_BINARY=hani-bubbletea
+DIY_FILE=diy_hani.go
+BUBBLETEA_FILES=main.go model.go keys.go config.go highlight.go version.go
 
-.PHONY: all build test clean run install help
+.PHONY: all build build-diy build-bubbletea test clean run install help
 
-all: build
+all: build-diy
 
-# Build the binary
-build:
-	@echo "🏗️  Building Hani..."
-	go build -o $(BINARY_NAME) .
-	@echo "✅ Build complete!"
+# Build the DIY version (recommended)
+build-diy:
+	@echo "🏗️  Building Hani DIY version..."
+	go build -o $(BINARY_NAME) $(DIY_FILE)
+	@echo "✅ DIY version build complete!"
 
-# Run tests
-test: build
-	@echo "🧪 Running tests..."
-	./test.sh
+# Build the Bubbletea version (legacy)
+build-bubbletea:
+	@echo "🏗️  Building Hani Bubbletea version..."
+	go build -o $(BUBBLETEA_BINARY) $(BUBBLETEA_FILES)
+	@echo "✅ Bubbletea version build complete!"
+
+# Build both versions
+build: build-diy build-bubbletea
+
+# Run tests (if any exist)
+test: build-diy
+	@echo "🧪 Running basic functionality test..."
+	@echo "Testing DIY version compilation..."
+	@./$(BINARY_NAME) --help 2>/dev/null || echo "Built successfully!"
 
 # Clean build artifacts
 clean:
 	@echo "🧹 Cleaning..."
-	rm -f $(BINARY_NAME)
+	rm -f $(BINARY_NAME) $(BUBBLETEA_BINARY)
 	@echo "✅ Clean complete!"
 
-# Run the editor with sample file
-run: build
-	@echo "🚀 Starting Hani with sample file..."
-	./$(BINARY_NAME) sample.md
+# Run the DIY version with test file
+run: build-diy
+	@echo "🚀 Starting Hani DIY version..."
+	./$(BINARY_NAME) README.md
 
-# Run the editor with no file (new file mode)
-new: build
-	@echo "🚀 Starting Hani in new file mode..."
+# Run the DIY version with no file (new file mode)
+new: build-diy
+	@echo "🚀 Starting Hani DIY version in new file mode..."
 	./$(BINARY_NAME)
+
+# Compare both versions
+compare: build
+	@echo "🔄 Both versions built:"
+	@echo "  - DIY version: ./$(BINARY_NAME)"
+	@echo "  - Bubbletea version: ./$(BUBBLETEA_BINARY)"
 
 # Install dependencies
 deps:

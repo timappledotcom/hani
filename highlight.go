@@ -1,12 +1,13 @@
 package main
 
 import (
+	"strings"
+
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/charmbracelet/lipgloss"
-	"strings"
 )
 
 // SyntaxHighlighter handles syntax highlighting using Chroma
@@ -41,7 +42,7 @@ func NewSyntaxHighlighter() *SyntaxHighlighter {
 	}
 
 	// Test the highlighter to ensure it works
-	if highlighter == nil || highlighter.formatter == nil || highlighter.style == nil {
+	if highlighter.formatter == nil || highlighter.style == nil {
 		return nil
 	}
 
