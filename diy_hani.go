@@ -100,13 +100,11 @@ func NewDIYEditor(filename string) (*DIYEditor, error) {
 	// Create glamour renderer for preview with syntax highlighting
 	// Try different styles for best syntax highlighting
 	var renderer *glamour.TermRenderer
-	var err error
 
 	// Try auto style first (adapts to terminal)
 	renderer, err = glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
 		glamour.WithWordWrap(width-4), // Leave some margin
-		glamour.WithPreserveNewLines(),
 	)
 
 	if err != nil {
@@ -874,7 +872,6 @@ func (e *DIYEditor) pasteFromClipboard() {
 	} else if len(lines) > 1 {
 		e.setStatus(fmt.Sprintf("Pasted %d lines", len(lines)))
 	}
-}
 }
 
 // getClipboard gets clipboard content using various clipboard tools
